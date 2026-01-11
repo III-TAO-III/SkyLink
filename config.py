@@ -2,22 +2,33 @@ import os
 import json
 import logging
 import re
+from dotenv import load_dotenv
 from pathlib import Path
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Load environment variables from .env file
+load_dotenv()
+
+# --- Constants ---
+API_URL = os.getenv("SKYLINK_API_URL")
+USER_AGENT = "SkyLink-Client/1.0"
+
+# --- Globals ---
+APPDATA_DIR = Path(os.getenv('APPDATA')) / 'SkyLink'
+APPDATA_DIR.mkdir(parents=True, exist_ok=True)
+ACCOUNTS_FILE = APPDATA_DIR / 'accounts.json'
+CURRENT_SESSION = {"commander": None, "api_key": None}
 
 def save_events_compact(data, filepath):
     """Saves the events.json file with compact formatting for leaf objects."""
     json_str = json.dumps(data, indent=2)
     
     # Regex to find simple objects and collapse them
-    # This looks for an opening brace, followed by one or more lines of key-value pairs
-    # where values are primitives (strings, bools, numbers), and then a closing brace.
     compact_pattern = re.compile(r'{\s*"\w+":\s*("[^"]+"|true|false|[\d\.]+),*\s*(\s*"\w+":\s*("[^"]+"|true|false|[\d\.]+),*\s*)*\s*}')
 
     def replacer(match):
-        # Take the matched string, remove newlines and extra spaces
         s = match.group(0)
         s = re.sub(r'\s*\n\s*', ' ', s)
         s = re.sub(r',\s*}', ' }', s)
@@ -36,14 +47,43 @@ class Config:
     def __init__(self):
         self.app_data_dir = Path(os.getenv('APPDATA')) / 'SkyLink'
         self.app_data_dir.mkdir(parents=True, exist_ok=True)
-        self.config_file = self.app_data_dir / 'config.json'
-        self.settings = {}
         self.event_rules = {}
         self.field_rules = {}
         self.default_action = 'send'  # Default fallback
-        self.load()
+        self.accounts = {}
         self.load_event_rules()
         self.load_field_rules()
+        self.load_accounts()
+
+        # --- Expose env vars through the instance ---
+        self.API_URL = API_URL
+        self.USER_AGENT = USER_AGENT
+        
+        # --- Journal Path ---
+        self.journal_path = self.get_default_journal_dir()
+        if not self.journal_path:
+            logging.error("Could not find Elite Dangerous journal directory.")
+
+    def load_accounts(self):
+        """Loads commander accounts from accounts.json."""
+        logging.info(f"📂 Loading accounts from: {ACCOUNTS_FILE}")
+        if not ACCOUNTS_FILE.exists():
+            logging.warning(f"⚠ Accounts file not found at {ACCOUNTS_FILE}. Please create it.")
+            self._save_json(ACCOUNTS_FILE, {"accounts": {"YourCommanderName": "your_api_key_here"}})
+
+        try:
+            with open(ACCOUNTS_FILE, 'r') as f:
+                self.accounts = json.load(f).get("accounts", {})
+        except (IOError, json.JSONDecodeError) as e:
+            logging.error(f"Failed to load or parse accounts.json: {e}")
+            self.accounts = {}
+
+    def save_account(self, commander_name, api_key):
+        """Updates and saves an account to accounts.json."""
+        self.accounts[commander_name] = api_key
+        self._save_json(ACCOUNTS_FILE, {"accounts": self.accounts})
+
+
 
     def load_field_rules(self):
         """Loads the field filter rules from fields.json."""
@@ -180,41 +220,6 @@ class Config:
 
 
 
-    def load(self):
-        """Loads configuration from the JSON file."""
-        if self.config_file.exists():
-            try:
-                with open(self.config_file, 'r') as f:
-                    self.settings = json.load(f)
-                    logging.info("Configuration loaded successfully.")
-            except json.JSONDecodeError:
-                logging.error("Failed to decode config.json. Starting with default settings.")
-                self.settings = {}
-        else:
-            logging.info("No config file found. Starting with default settings.")
-            self.settings = {
-                'api_key': '',
-                'journal_path': self.get_default_journal_dir()
-            }
-            self.save()
-
-    def save(self):
-        """Saves the current configuration to the JSON file."""
-        try:
-            with open(self.config_file, 'w') as f:
-                json.dump(self.settings, f, indent=4)
-            logging.info("Configuration saved successfully.")
-        except Exception as e:
-            logging.error(f"Error saving configuration: {e}")
-
-    def get(self, key, default=None):
-        """Retrieves a value from the configuration."""
-        return self.settings.get(key, default)
-
-    def set(self, key, value):
-        """Sets a value in the configuration and saves it."""
-        self.settings[key] = value
-        self.save()
 
     def get_default_journal_dir(self):
         """Finds the default Elite Dangerous journal directory."""
@@ -226,10 +231,3 @@ class Config:
             logging.warning("Could not find default Elite Dangerous journal directory.")
             return None
 
-if __name__ == '__main__':
-    # For testing purposes
-    config = Config()
-    print(f"API Key: {config.get('api_key')}")
-    print(f"Journal Path: {config.get('journal_path')}")
-    # config.set('api_key', 'test-key-123')
-    # print(f"New API Key: {config.get('api_key')}")

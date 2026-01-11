@@ -5,7 +5,7 @@ from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from utils import parse_json_line
-from config import Config
+from config import Config, CURRENT_SESSION
 from sender import Sender
 
 # Configure logging
@@ -49,11 +49,17 @@ class JournalWatcher:
             return
 
         event_type = event_data['event']
+
+        # --- Session Switching Logic ---
+        if event_type in ["Commander", "LoadGame"]:
+            commander_name = event_data.get("Name") or event_data.get("Commander")
+            if commander_name:
+                self.update_session(commander_name)
+        
         rule = self.config.event_rules.get(event_type)
         
         if not rule:
             self.config.register_new_event(event_type)
-            # Re-fetch the rule in case it was just added
             rule = self.config.event_rules.get(event_type)
 
         action = self.config.default_action
@@ -62,9 +68,24 @@ class JournalWatcher:
 
         if action == 'send':
             logging.info(f"Processing event: {event_type}")
-            self.sender.send_event(event_data)
+            self.sender.queue_event(event_data)
         else:
             logging.debug(f"Ignoring event based on rule or default action: {event_type}")
+
+    def update_session(self, commander_name):
+        """Updates the current session based on the detected commander."""
+        if CURRENT_SESSION["commander"] == commander_name:
+            return # No change
+
+        CURRENT_SESSION["commander"] = commander_name
+        api_key = self.config.accounts.get(commander_name)
+        
+        if api_key:
+            CURRENT_SESSION["api_key"] = api_key
+            logging.info(f"🚀 Switched session to Commander: {commander_name}")
+        else:
+            CURRENT_SESSION["api_key"] = None
+            logging.warning(f"🚨 No API Key found for Commander: {commander_name}. Events will not be sent.")
 
     def start(self):
         """Starts the journal watcher."""

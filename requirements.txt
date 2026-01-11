@@ -2,3 +2,4 @@ pystray
 watchdog
 requests
 Pillow
+python-dotenv

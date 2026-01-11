@@ -33,7 +33,8 @@ class SkyLinkApp:
         """Sets up the system tray icon and its menu."""
         menu = pystray.Menu(
             pystray.MenuItem(lambda text: f"Status: {self.status}", None, enabled=False),
-            pystray.MenuItem('Set API Key', self.prompt_for_api_key),
+            # The API key is now configured via .env, so this is less critical
+            # pystray.MenuItem('Set API Key', self.prompt_for_api_key),
             pystray.MenuItem('Exit', self.exit_app)
         )
         self.icon = pystray.Icon("skylink", self.create_icon(), "SkyLink", menu)
@@ -55,50 +56,24 @@ class SkyLinkApp:
         # This is a bit of a hack to force the menu to update
         self.icon.update_menu()
 
-    def prompt_for_api_key(self):
-        """Opens a dialog to ask the user for their API key."""
-        root = tk.Tk()
-        root.withdraw()
-        api_key = simpledialog.askstring("API Key", "Please enter your SkyLink API Key:", show='*')
-        if api_key:
-            self.config.set('api_key', api_key)
-            messagebox.showinfo("Success", "API Key saved. Please restart the application if it was not running.")
-            # If the app is already running, we might want to re-initialize the sender
-            if self.sender:
-                self.sender.api_key = api_key
-        root.destroy()
-
     def run(self):
         """Main application loop."""
         logging.info("Starting SkyLink application...")
         self.setup_tray_icon()
         self.update_status("Starting", "Initializing...")
 
-        api_key = self.config.get('api_key')
-        journal_path = self.config.get('journal_path')
-
-        if not api_key:
-            logging.warning("API Key is not set.")
-            self.update_status("Error", "API Key not set.")
-            self.prompt_for_api_key()
-            api_key = self.config.get('api_key') # Re-fetch after prompt
-            if not api_key:
-                self.exit_app()
-                return
-
-        if not journal_path:
-            logging.error("Elite Dangerous journal path not found.")
+        if not self.config.journal_path:
             self.update_status("Error", "Journal path not found.")
             messagebox.showerror("Error", "Could not find the Elite Dangerous journal directory.")
             self.exit_app()
             return
             
         cache_file = self.config.app_data_dir / 'deduplication_cache.json'
-        self.sender = Sender(api_key=api_key, cache_path=cache_file, config=self.config)
+        self.sender = Sender(cache_path=cache_file, config=self.config)
         self.sender.set_status_callback(self.update_status)
         self.sender.start()
         
-        self.watcher = JournalWatcher(journal_dir=journal_path, sender_instance=self.sender, config=self.config)
+        self.watcher = JournalWatcher(journal_dir=self.config.journal_path, sender_instance=self.sender, config=self.config)
         self.watcher.start()
 
         self.update_status("Running", "Monitoring journal files...")

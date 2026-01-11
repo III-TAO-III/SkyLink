@@ -6,15 +6,14 @@ import queue
 import threading
 import time
 from utils import calculate_hash, filter_event_fields
+from config import CURRENT_SESSION
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class Sender(threading.Thread):
-    def __init__(self, api_key, cache_path, config, api_url='http://localhost:3000/api/telemetry/skylink'):
+    def __init__(self, cache_path, config):
         super().__init__(daemon=True)
-        self.api_key = api_key
-        self.api_url = api_url
         self.cache_path = cache_path
         self.config = config
         self.event_queue = queue.Queue()
@@ -64,7 +63,7 @@ class Sender(threading.Thread):
             self.status_callback(status, message)
         logging.info(f"Status: {status} - {message}")
 
-    def send_event(self, event):
+    def queue_event(self, event):
         """Adds an event to the processing queue."""
         self.event_queue.put(event)
 
@@ -126,13 +125,24 @@ class Sender(threading.Thread):
             logging.info(f"Successfully sent event: {event_type}")
 
     def _send_to_api(self, event):
-        """Sends a single event to the API."""
+        """Sends a single event to the API with dynamic, session-based headers."""
+        if not CURRENT_SESSION["api_key"]:
+            logging.warning(f"Cannot send event: No active API Key for commander {CURRENT_SESSION['commander']}")
+            return
+
+        if not self.config.API_URL:
+            logging.error("API URL is not configured. Cannot send event.")
+            return
+
         headers = {
             'Content-Type': 'application/json',
-            'x-api-key': self.api_key
+            'User-Agent': self.config.USER_AGENT,
+            'x-api-key': CURRENT_SESSION["api_key"],
+            'x-commander': CURRENT_SESSION["commander"]
         }
+
         try:
-            response = requests.post(self.api_url, headers=headers, json=event, timeout=10)
+            response = requests.post(self.config.API_URL, headers=headers, json=event, timeout=10)
             if response.status_code == 200:
                 self._log_event_details(event)
                 self.update_status('Running', 'Event sent successfully.')
