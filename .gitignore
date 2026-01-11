@@ -1,0 +1,13 @@
+# Python garbage
+__pycache__/
+*.py[cod]
+venv/
+.env
+
+# Logs and Caches
+*.log
+deduplication_cache.json
+
+# System
+.DS_Store
+Thumbs.db

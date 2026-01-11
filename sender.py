@@ -1,0 +1,159 @@
+import os
+import requests
+import json
+import logging
+import queue
+import threading
+import time
+from utils import calculate_hash, filter_event_fields
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+class Sender(threading.Thread):
+    def __init__(self, api_key, cache_path, config, api_url='http://localhost:3000/api/telemetry/skylink'):
+        super().__init__(daemon=True)
+        self.api_key = api_key
+        self.api_url = api_url
+        self.cache_path = cache_path
+        self.config = config
+        self.event_queue = queue.Queue()
+        self.offline_queue = queue.Queue()
+        self.hashes = {}
+        self.load_hashes()
+        self.stop_event = threading.Event()
+        self.status_callback = None
+
+    def load_hashes(self):
+        """Loads hashes from the cache file or creates it if it doesn't exist."""
+        if self.cache_path.exists():
+            try:
+                with open(self.cache_path, 'r') as f:
+                    # Handle empty file case
+                    content = f.read()
+                    if not content:
+                        self.hashes = {}
+                    else:
+                        self.hashes = json.loads(content)
+                logging.info(f"Deduplication cache loaded from: {os.path.abspath(self.cache_path)}")
+            except (json.JSONDecodeError, IOError) as e:
+                logging.error(f"Failed to load deduplication cache: {e}")
+                self.hashes = {}
+        else:
+            logging.info("Cache file not found. Creating a new one.")
+            self.hashes = {}
+            self.save_hashes()
+
+    def save_hashes(self):
+        """Saves hashes to the cache file."""
+        abs_path = os.path.abspath(self.cache_path)
+        logging.info(f"💾 Saving cache to: {abs_path}")
+        try:
+            with open(self.cache_path, 'w') as f:
+                json.dump(self.hashes, f, indent=2)
+        except IOError as e:
+            logging.error(f"Failed to save deduplication cache: {e}")
+
+    def set_status_callback(self, callback):
+        """Sets a callback function to be called on status changes."""
+        self.status_callback = callback
+
+    def update_status(self, status, message):
+        """Updates the application status via the callback."""
+        if self.status_callback:
+            self.status_callback(status, message)
+        logging.info(f"Status: {status} - {message}")
+
+    def send_event(self, event):
+        """Adds an event to the processing queue."""
+        self.event_queue.put(event)
+
+    def run(self):
+        """Processes the event queue and sends data to the API."""
+        while not self.stop_event.is_set():
+            try:
+                event = self.event_queue.get(timeout=1)
+                self.process_event(event)
+            except queue.Empty:
+                self.retry_offline_queue()
+                continue
+
+    def stop(self):
+        """Stops the sender thread."""
+        self.stop_event.set()
+
+    def process_event(self, event):
+        """Processes a single event: schema update, filtering, and deduplication."""
+        event_type = event.get('event')
+        if not event_type:
+            return
+
+        # 1. Update schema before doing anything else
+        self.config.update_field_schema(event_type, event)
+        
+        # 2. Filter the event based on field rules
+        field_rules = self.config.field_rules.get("filters", {}).get(event_type, {})
+        filtered_event = filter_event_fields(event, field_rules)
+        
+        # 3. Handle deduplication based on event rules
+        rule = self.config.event_rules.get(event_type)
+        if rule and rule.get('deduplicate'):
+            # Important: Hash the *filtered* event
+            event_hash = calculate_hash(filtered_event, exclude_keys=['timestamp'])
+            if self.hashes.get(event_type) == event_hash:
+                logging.info(f"Skipping duplicate event: {event_type}")
+                return
+            self.hashes[event_type] = event_hash
+            self.save_hashes()
+
+        # 4. Send the filtered event
+        self._send_to_api(filtered_event)
+
+    def _log_event_details(self, event):
+        """Logs detailed information for specific events."""
+        event_type = event.get('event')
+        if event_type == 'Location':
+            docked_status = "Docked: True" if event.get('Docked', False) else "Docked: False"
+            logging.info(f"[>] Location: {event.get('StarSystem', 'N/A')} ({docked_status})")
+        elif event_type == 'Loadout':
+            jump_range = event.get('MaxJumpRange', 0)
+            logging.info(f"[>] Loadout: {event.get('Ship', 'N/A')} (Jump: {jump_range:.2f} ly)")
+        elif event_type == 'Materials':
+            raw_count = len(event.get('Raw', []))
+            encoded_count = len(event.get('Encoded', []))
+            logging.info(f"[>] Materials: Updated (Raw: {raw_count}, Encoded: {encoded_count})")
+        else:
+            logging.info(f"Successfully sent event: {event_type}")
+
+    def _send_to_api(self, event):
+        """Sends a single event to the API."""
+        headers = {
+            'Content-Type': 'application/json',
+            'x-api-key': self.api_key
+        }
+        try:
+            response = requests.post(self.api_url, headers=headers, json=event, timeout=10)
+            if response.status_code == 200:
+                self._log_event_details(event)
+                self.update_status('Running', 'Event sent successfully.')
+            else:
+                logging.error(f"Failed to send event: {response.status_code} - {response.text}")
+                self.offline_queue.put(event)
+                self.update_status('Error', 'Failed to send event, queuing.')
+        except requests.RequestException as e:
+            logging.error(f"Network error while sending event: {e}")
+            self.offline_queue.put(event)
+            self.update_status('Error', 'Network error, queuing event.')
+
+    def retry_offline_queue(self):
+        """Tries to send events from the offline queue."""
+        if not self.offline_queue.empty():
+            logging.info(f"Retrying {self.offline_queue.qsize()} events from the offline queue.")
+            while not self.offline_queue.empty():
+                event = self.offline_queue.get()
+                self._send_to_api(event)
+                if self.offline_queue.qsize() > 0:
+                    time.sleep(2)  # Wait a bit before retrying the next one
+                else:
+                    self.update_status('Running', 'Offline queue cleared.')
+
