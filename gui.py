@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw
 from config import Config, CURRENT_SESSION, UI_STATE
 from utils import verify_api_key
 from main import start_background_service, stop_background_service
-from sender import Sender
+from sender import Sender, FAILED_ACCOUNTS
 
 # --- Theme Setup ---
 COLOR_BG = "#0a0a0f"
@@ -191,6 +191,15 @@ class AccountRow(ctk.CTkFrame):
             self.entry_key.delete(0, "end")
             self.entry_key.configure(placeholder_text="Invalid Key")
             self.btn_save.configure(text="SAVE", state="normal")
+
+    def update_auth_status(self):
+        """Проверяет, не забанен ли этот пилот сервером."""
+        if self.commander_name in FAILED_ACCOUNTS:
+            # Если в черном списке — показываем красный крест
+            self.lbl_status.configure(text="INVALID ✕", text_color=COLOR_RED)
+        else:
+            # Иначе — все ок (мы не проверяем "LINKED" каждую секунду, считаем что ок)
+            self.lbl_status.configure(text="LINKED ✓", text_color=COLOR_GREEN)
 
 class SkyLinkGUI(ctk.CTk):
     def __init__(self, config):
@@ -398,6 +407,15 @@ class SkyLinkGUI(ctk.CTk):
         else:
             self.lbl_commander.configure(text="WAITING FOR SIGNAL...")
             self.lbl_active_status.configure(text="", text_color="gray")
+
+        # --- НОВЫЙ БЛОК: Обновление статусов авторизации ---
+        # Пробегаем по всем строкам в списке и просим их проверить статус
+        try:
+            for widget in self.scroll_frame.winfo_children():
+                if isinstance(widget, AccountRow):
+                    widget.update_auth_status()
+        except Exception:
+            pass # Защита от перерисовки в момент итерации
         
         # 2. Status & Tray Color (Direct Logic)
         status_text = UI_STATE.get("status", "Idle")

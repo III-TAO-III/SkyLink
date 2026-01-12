@@ -6,9 +6,11 @@ import queue
 import threading
 import time
 import hashlib
-import json
 from utils import calculate_hash, filter_event_fields
 from config import CURRENT_SESSION
+
+# Глобальный регистр ошибок авторизации (хранится в оперативной памяти)
+FAILED_ACCOUNTS = set()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -120,6 +122,13 @@ class Sender(threading.Thread):
         if not event_type:
             return
 
+        # --- GLOBAL FILTER: Игнорируем SquadronCarrier ---
+        # Это защищает нас от CarrierLocation, CarrierJump и любых других событий,
+        # связанных с общими флотоносцами эскадрильи.
+        if event.get('CarrierType') == 'SquadronCarrier':
+            return
+        # -------------------------------------------------
+
         # 1. Update schema before doing anything else
         self.config.update_field_schema(event_type, event)
         
@@ -170,8 +179,11 @@ class Sender(threading.Thread):
 
     def _send_to_api(self, event):
         """Sends a single event to the API with dynamic, session-based headers."""
+        # Берем имя текущего пилота ИЗ СЕССИИ. Это самый надежный источник.
+        cmdr_name = CURRENT_SESSION.get("commander", "Unknown")
+
         if not CURRENT_SESSION["api_key"]:
-            logging.warning(f"Cannot send event: No active API Key for commander {CURRENT_SESSION['commander']}")
+            logging.warning(f"Cannot send event: No active API Key for commander {cmdr_name}")
             return
 
         if not self.config.API_URL:
@@ -182,18 +194,31 @@ class Sender(threading.Thread):
             'Content-Type': 'application/json',
             'User-Agent': self.config.USER_AGENT,
             'x-api-key': CURRENT_SESSION["api_key"],
-            'x-commander': CURRENT_SESSION["commander"]
+            'x-commander': cmdr_name
         }
 
         try:
             response = requests.post(self.config.API_URL, headers=headers, json=event, timeout=10)
+            
+            # --- ЛОГИКА СТАТУСОВ ---
             if response.status_code == 200:
                 self._log_event_details(event)
                 self.update_status('Running', 'Event sent successfully.')
+                # Если все ок — убираем из черного списка (вдруг починили)
+                FAILED_ACCOUNTS.discard(cmdr_name)
+
+            elif response.status_code in [401, 403]:
+                # 401/403 = Ключ неверный. Баним визуально.
+                logging.error(f"⛔ Auth failed for {cmdr_name} (Status: {response.status_code})")
+                FAILED_ACCOUNTS.add(cmdr_name)
+                self.update_status('Error', f'Auth Error {response.status_code} for {cmdr_name}')
+
             else:
+                # Другие ошибки (500 и т.д.)
                 logging.error(f"Failed to send event: {response.status_code} - {response.text}")
                 self.offline_queue.put(event)
                 self.update_status('Error', 'Failed to send event, queuing.')
+
         except requests.RequestException as e:
             logging.error(f"Network error while sending event: {e}")
             self.offline_queue.put(event)
