@@ -1,111 +1,62 @@
 import logging
-import threading
-import tkinter as tk
-from tkinter import simpledialog, messagebox
-from PIL import Image, ImageDraw
-import pystray
-from config import Config
+import time
+from config import Config, UI_STATE
 from sender import Sender
 from watcher import JournalWatcher
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-class SkyLinkApp:
-    def __init__(self):
-        self.config = Config()
-        self.sender = None
-        self.watcher = None
-        self.status = "Stopped"
-        self.status_message = "Application is not running."
-        self.icon = None
+# --- Global Instances ---
+config = Config()
+sender = None
+watcher = None
 
-    def create_icon(self, color='gray'):
-        """Creates a system tray icon with the given color."""
-        width = 64
-        height = 64
-        image = Image.new('RGB', (width, height), 'black')
-        dc = ImageDraw.Draw(image)
-        dc.rectangle([(0, 0), (width, height)], fill=color)
-        return image
+def update_ui_state(status, message):
+    """Callback to update the global UI state from background threads."""
+    UI_STATE["status"] = message or status
+    
+    st_lower = status.lower()
+    if "running" in st_lower or "sent" in st_lower or "monitoring" in st_lower:
+        UI_STATE["color"] = "green"
+    elif "error" in st_lower or "failed" in st_lower or "invalid" in st_lower:
+        UI_STATE["color"] = "red"
+    else:
+        UI_STATE["color"] = "gray"
 
-    def setup_tray_icon(self):
-        """Sets up the system tray icon and its menu."""
-        menu = pystray.Menu(
-            pystray.MenuItem(lambda text: f"Status: {self.status}", None, enabled=False),
-            # The API key is now configured via .env, so this is less critical
-            # pystray.MenuItem('Set API Key', self.prompt_for_api_key),
-            pystray.MenuItem('Exit', self.exit_app)
-        )
-        self.icon = pystray.Icon("skylink", self.create_icon(), "SkyLink", menu)
-        
-        # Run the icon in a separate thread to avoid blocking
-        icon_thread = threading.Thread(target=self.icon.run, daemon=True)
-        icon_thread.start()
+def start_background_service():
+    """Initializes and starts the background services."""
+    global sender, watcher
 
-    def update_status(self, status, message=""):
-        """Updates the application status and icon color."""
-        self.status = status
-        self.status_message = message
-        if self.status == "Running":
-            self.icon.icon = self.create_icon('green')
-        elif self.status == "Error":
-            self.icon.icon = self.create_icon('red')
-        else:
-            self.icon.icon = self.create_icon('gray')
-        # This is a bit of a hack to force the menu to update
-        self.icon.update_menu()
+    logging.info("🚀 Starting SkyLink background service...")
 
-    def run(self):
-        """Main application loop."""
-        logging.info("Starting SkyLink application...")
-        self.setup_tray_icon()
-        self.update_status("Starting", "Initializing...")
+    cache_file = config.app_data_dir / 'deduplication_cache.json'
+    sender = Sender(cache_path=cache_file, config=config)
+    sender.set_status_callback(update_ui_state)  # Wire the callback
+    sender.start()
 
-        if not self.config.journal_path:
-            self.update_status("Error", "Journal path not found.")
-            messagebox.showerror("Error", "Could not find the Elite Dangerous journal directory.")
-            self.exit_app()
-            return
-            
-        cache_file = self.config.app_data_dir / 'deduplication_cache.json'
-        self.sender = Sender(cache_path=cache_file, config=self.config)
-        self.sender.set_status_callback(self.update_status)
-        self.sender.start()
-        
-        self.watcher = JournalWatcher(journal_dir=self.config.journal_path, sender_instance=self.sender, config=self.config)
-        self.watcher.start()
+    if config.journal_path:
+        watcher = JournalWatcher(journal_dir=config.journal_path, sender_instance=sender, config=config)
+        watcher.start()
+        logging.info("👀 Journal watcher started.")
+    else:
+        logging.error("Could not find the Elite Dangerous journal directory. Watcher not started.")
 
-        self.update_status("Running", "Monitoring journal files...")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        stop_background_service()
 
-        # Keep the main thread alive
-        try:
-            while True:
-                pass
-        except KeyboardInterrupt:
-            self.exit_app()
-
-    def exit_app(self):
-        """Shuts down the application gracefully."""
-        logging.info("Shutting down SkyLink...")
-        if self.watcher:
-            self.watcher.stop()
-        if self.sender:
-            self.sender.stop()
-            self.sender.join()
-        if self.icon:
-            self.icon.stop()
-        
-        # A small delay to ensure threads are closed
-        import time
-        time.sleep(1)
-        
-        # Force exit if threads are still hanging
-        os._exit(0)
-
+def stop_background_service():
+    """Stops the background services gracefully."""
+    logging.info("🛑 Stopping SkyLink background service...")
+    if watcher:
+        watcher.stop()
+    if sender:
+        sender.stop()
+        sender.join()
+    logging.info("✅ Background services stopped.")
 
 if __name__ == '__main__':
-    # Add os._exit(0) to handle exit from main thread
-    import os
-    app = SkyLinkApp()
-    app.run()
+    start_background_service()
