@@ -78,8 +78,11 @@ class AccountRow(ctk.CTkFrame):
         self.lbl_name = ctk.CTkLabel(self, text=name, font=("Roboto Medium", 14), text_color=COLOR_TEXT_WHITE, anchor="w")
         self.lbl_name.grid(row=0, column=0, padx=10, pady=(6, 2), sticky="w")
         
-        separator = ctk.CTkFrame(self, height=1, fg_color="#1f1f23")
-        separator.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(2, 0))
+        # 2. Разделитель
+        # FIX: corner_radius=0 обязателен, иначе линия исчезает.
+        # height=2 делает её четче.
+        separator = ctk.CTkFrame(self, height=2, fg_color="#333333", corner_radius=0)
+        separator.grid(row=1, column=0, columnspan=2, sticky="ew", padx=30, pady=(5, 0))
 
         # Status/Actions Container
         self.status_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -88,7 +91,7 @@ class AccountRow(ctk.CTkFrame):
         self.lbl_status = ctk.CTkLabel(self.status_frame, text="LINKED ✓", text_color=COLOR_GREEN, font=("Consolas", 11, "bold"))
         self.lbl_status.pack(side="left", padx=10)
 
-        self.btn_change = ctk.CTkButton(self.status_frame, text="CHANGE API", width=80, height=24, fg_color="#27272a", hover_color=COLOR_ACCENT, command=self.show_edit_mode)
+        self.btn_change = ctk.CTkButton(self.status_frame, text="CHANGE API", width=90, height=24, fg_color="transparent", border_width=1, border_color="#333333", text_color="#9ca3af", hover_color="#18181b", command=self.show_edit_mode)
         self.btn_change.pack(side="left", padx=5)
 
         self.btn_delete = ctk.CTkButton(
@@ -119,9 +122,11 @@ class AccountRow(ctk.CTkFrame):
         # Edit Mode Container
         self.edit_frame = ctk.CTkFrame(self, fg_color="transparent")
         
-        self.entry_key = ctk.CTkEntry(self.edit_frame, placeholder_text="Paste API Key...", width=200, height=28, show="*")
+        self.entry_key = ctk.CTkEntry(self.edit_frame, placeholder_text="Paste NEW API Key...", width=300, height=28)
         self.entry_key.pack(side="left", padx=5)
-        if api_key: self.entry_key.insert(0, api_key)
+        
+        self.btn_paste = ctk.CTkButton(self.edit_frame, text="PASTE", width=50, height=28, fg_color="#333333", hover_color="#444444", command=self.paste_from_clipboard)
+        self.btn_paste.pack(side="left", padx=(0, 5))
 
         self.btn_save = ctk.CTkButton(self.edit_frame, text="SAVE", width=60, height=28, fg_color=COLOR_ACCENT, hover_color="#c2410c", command=self.save_key)
         self.btn_save.pack(side="left", padx=5)
@@ -134,6 +139,13 @@ class AccountRow(ctk.CTkFrame):
             self.destroy()
         else:
             self.show_view_mode()
+
+    def paste_from_clipboard(self):
+        try:
+            self.entry_key.delete(0, "end")
+            self.entry_key.insert(0, self.clipboard_get())
+        except:
+            pass
 
     def show_edit_mode(self):
         self.status_frame.grid_forget()
@@ -191,7 +203,7 @@ class SkyLinkGUI(ctk.CTk):
 
         # 1. Настройка окна
         self.overrideredirect(True)
-        self.geometry("540x380")
+        self.geometry("640x420")
         self.configure(fg_color=COLOR_BORDER)
         self.center_window()
 
@@ -223,9 +235,9 @@ class SkyLinkGUI(ctk.CTk):
     def center_window(self):
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
-        x = (screen_width / 2) - (500 / 2)
-        y = (screen_height / 2) - (380 / 2)
-        self.geometry(f'500x380+{int(x)}+{int(y)}')
+        x = (screen_width / 2) - (640 / 2)
+        y = (screen_height / 2) - (420 / 2)
+        self.geometry(f'640x420+{int(x)}+{int(y)}')
 
     def create_header(self):
         self.header = ctk.CTkFrame(self.inner_frame, fg_color="#18181b", height=44, corner_radius=0)
@@ -260,13 +272,15 @@ class SkyLinkGUI(ctk.CTk):
         
         self.btn_add = ctk.CTkButton(
             self.footer, 
-            text="+ Add Account", 
-            fg_color="#18181b", 
+            text="+ ADD ACCOUNT",          # КАПСОМ стильнее
+            font=("Arial", 11, "bold"),
+            fg_color="transparent",        # Прозрачная
             border_width=1, 
             border_color="#3f3f46", 
             text_color="#9ca3af", 
-            hover_color=COLOR_ACCENT, 
-            width=110, 
+            hover_color="#27272a",         # Subtle hover
+            width=120, 
+            height=32,                     # Чуть выше
             command=self.add_manual_account
         )
         self.btn_add.pack(side="left")
@@ -278,11 +292,11 @@ class SkyLinkGUI(ctk.CTk):
         self.body_frame = ctk.CTkFrame(self.inner_frame, fg_color="transparent")
         self.body_frame.pack(side="top", fill="both", expand=True, padx=5, pady=5)
 
-        # Active Commander
+        # 1. Active Commander Block
         self.active_frame = ctk.CTkFrame(self.body_frame, fg_color="transparent")
         self.active_frame.pack(fill="x", padx=10, pady=(10, 5))
         
-        ctk.CTkLabel(self.active_frame, text="ACTIVE COMMANDER:", text_color=COLOR_TEXT_GRAY, font=("Arial", 10)).pack(anchor="w")
+        ctk.CTkLabel(self.active_frame, text="ACTIVE COMMANDER:", text_color=COLOR_TEXT_GRAY, font=("Arial", 10, "bold")).pack(anchor="w")
         
         pilot_row = ctk.CTkFrame(self.active_frame, fg_color="transparent")
         pilot_row.pack(fill="x", pady=(0, 5))
@@ -290,10 +304,22 @@ class SkyLinkGUI(ctk.CTk):
         self.lbl_commander = ctk.CTkLabel(pilot_row, text="WAITING...", font=("Arial", 20, "bold"), text_color=COLOR_TEXT_WHITE)
         self.lbl_commander.pack(side="left")
         self.lbl_active_status = ctk.CTkLabel(pilot_row, text="", font=("Arial", 12, "bold"), text_color=COLOR_GREEN)
-        self.lbl_active_status.pack(side="right")
+        self.lbl_active_status.pack(side="right", padx=(0, 30))
 
-        # Scroll List
-        ctk.CTkLabel(self.body_frame, text="REGISTERED ACCOUNTS:", text_color=COLOR_TEXT_GRAY, font=("Arial", 10)).pack(anchor="w", padx=10)
+        # 2. Section Header with Line (Решение твоей проблемы)
+        # Создаем контейнер для заголовка
+        header_row = ctk.CTkFrame(self.body_frame, fg_color="transparent")
+        header_row.pack(fill="x", padx=10, pady=(15, 5)) # pady=15 дает отступ сверху, отделяя от Active Commander
+        
+        # Текст
+        lbl = ctk.CTkLabel(header_row, text="REGISTERED ACCOUNTS", text_color=COLOR_TEXT_GRAY, font=("Arial", 10, "bold"))
+        lbl.pack(side="left")
+        
+        # Линия справа от текста
+        line = ctk.CTkFrame(header_row, height=2, fg_color="#333333", corner_radius=0)
+        line.pack(side="left", fill="x", expand=True, padx=(15, 0), pady=(5,0)) # pady выравнивает линию по центру текста
+
+        # 3. Scroll List
         self.scroll_frame = ctk.CTkScrollableFrame(
             self.body_frame, 
             fg_color="transparent",
@@ -367,8 +393,8 @@ class SkyLinkGUI(ctk.CTk):
         # 1. Active Commander
         current_cmdr = CURRENT_SESSION.get("commander")
         if current_cmdr:
-            self.lbl_commander.configure(text=f"🚀 {current_cmdr}")
-            self.lbl_active_status.configure(text="[ CONNECTED 🟢 ]", text_color=COLOR_GREEN)
+            self.lbl_commander.configure(text=current_cmdr)
+            self.lbl_active_status.configure(text="CONNECTED ●", text_color=COLOR_GREEN)
         else:
             self.lbl_commander.configure(text="WAITING FOR SIGNAL...")
             self.lbl_active_status.configure(text="", text_color="gray")
@@ -420,7 +446,7 @@ class SkyLinkGUI(ctk.CTk):
                 AccountRow(self.scroll_frame, name, key, self).pack(fill="x", pady=1)
 
     def add_manual_account(self):
-        row = AccountRow(self.scroll_frame, "New Commander", "", self, is_new=True)
+        row = AccountRow(self.scroll_frame, "NEW CMDR", "", self, is_new=True)
         row.pack(fill="x", pady=2)
         row.show_edit_mode()
 
