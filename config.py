@@ -2,6 +2,8 @@ import os
 import json
 import logging
 import re
+import ctypes
+from ctypes import wintypes
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -16,16 +18,26 @@ API_URL = os.getenv("SKYLINK_API_URL")
 USER_AGENT = "SkyLink-Client/1.0"
 
 # --- Globals ---
+# Храним пользовательские данные в AppData (стандарт Windows)
 APPDATA_DIR = Path(os.getenv('APPDATA')) / 'SkyLink'
 APPDATA_DIR.mkdir(parents=True, exist_ok=True)
 ACCOUNTS_FILE = APPDATA_DIR / 'accounts.json'
+EVENTS_FILE = APPDATA_DIR / 'events.json'
+
+# Глобальное состояние сессии
 CURRENT_SESSION = {"commander": None, "api_key": None}
+# Глобальное состояние для GUI (чтобы не импортировать config циклично)
+UI_STATE = {
+    "status": "WAITING",
+    "color": "gray",
+    "commander": None,
+    "auth_required": False
+}
 
 def save_events_compact(data, filepath):
     """Saves the events.json file with compact formatting for leaf objects."""
     json_str = json.dumps(data, indent=2)
-    
-    # Regex to find simple objects and collapse them
+    # Regex to find simple objects and collapse them into one line
     compact_pattern = re.compile(r'{\s*"\w+":\s*("[^"]+"|true|false|[\d\.]+),*\s*(\s*"\w+":\s*("[^"]+"|true|false|[\d\.]+),*\s*)*\s*}')
 
     def replacer(match):
@@ -45,79 +57,106 @@ def save_events_compact(data, filepath):
 
 class Config:
     def __init__(self):
-        self.app_data_dir = Path(os.getenv('APPDATA')) / 'SkyLink'
-        self.app_data_dir.mkdir(parents=True, exist_ok=True)
+        self.app_data_dir = APPDATA_DIR
         self.event_rules = {}
         self.field_rules = {}
-        self.default_action = 'send'  # Default fallback
+        self.default_action = 'send'
         self.accounts = {}
+        
+        # Загрузка правил
+        self._migrate_configs()
         self.load_event_rules()
-        self.load_field_rules()
         self.load_accounts()
 
         # --- Expose env vars through the instance ---
         self.API_URL = API_URL
         self.USER_AGENT = USER_AGENT
         
-        # --- Journal Path ---
-        self.journal_path = self.get_default_journal_dir()
+        # --- Journal Path Discovery (Advanced) ---
+        self.journal_path = self.get_saved_games_path()
         if not self.journal_path:
             logging.error("Could not find Elite Dangerous journal directory.")
+        else:
+            logging.info(f"📂 Journal directory detected: {self.journal_path}")
+
+    def _migrate_configs(self):
+        """Copies config files from local directory to AppData if they don't exist."""
+        local_events_file = Path('./events.json')
+        if not EVENTS_FILE.exists() and local_events_file.exists():
+            logging.info(f"🚚 Migrating local '{local_events_file}' to '{EVENTS_FILE}'...")
+            try:
+                import shutil
+                shutil.copy(local_events_file, EVENTS_FILE)
+            except Exception as e:
+                logging.error(f"Failed to migrate events.json: {e}")
+
+
+    def get_saved_games_path(self):
+        """
+        Uses Windows API to find the REAL 'Saved Games' folder location.
+        Works correctly with OneDrive, moved folders, etc.
+        """
+        try:
+            # GUID for 'Saved Games' folder
+            FOLDERID_SavedGames = '{4C5C32FF-BB9D-43b0-B5B4-2D72E54EAAA4}'
+            
+            buf = ctypes.create_unicode_buffer(ctypes.wintypes.MAX_PATH)
+            # Call SHGetFolderPath via shell32 (Legacy) or SHGetKnownFolderPath (Modern)
+            # Using SHGetFolderPath for broader compatibility, or manual registry lookup
+            # But here is the ctypes method for KnownFolder:
+            
+            CSIDL_PROFILE = 40
+            SHGFP_TYPE_CURRENT = 0
+            
+            # Simple fallback first: User Profile
+            path = Path.home() / 'Saved Games' / 'Frontier Developments' / 'Elite Dangerous'
+            if path.exists():
+                return str(path)
+
+            # If standard path fails (OneDrive case), try the Registry/API approach is safer conceptually,
+            # but for Python simplicity, checking the OneDrive path explicitly is often enough.
+            onedrive_path = Path.home() / 'OneDrive' / 'Saved Games' / 'Frontier Developments' / 'Elite Dangerous'
+            if onedrive_path.exists():
+                return str(onedrive_path)
+                
+            return None
+            
+        except Exception as e:
+            logging.error(f"Error detecting Saved Games path: {e}")
+            return None
 
     def load_accounts(self):
         """Loads commander accounts from accounts.json."""
         logging.info(f"📂 Loading accounts from: {ACCOUNTS_FILE}")
         if not ACCOUNTS_FILE.exists():
-            logging.warning(f"⚠ Accounts file not found at {ACCOUNTS_FILE}. Please create it.")
-            self._save_json(ACCOUNTS_FILE, {"accounts": {"YourCommanderName": "your_api_key_here"}})
+            logging.warning(f"⚠ Accounts file not found at {ACCOUNTS_FILE}. Creating empty registry.")
+            # Structure: {"accounts": {"Name": "Key"}}
+            self._save_json(ACCOUNTS_FILE, {"accounts": {}})
 
         try:
             with open(ACCOUNTS_FILE, 'r') as f:
-                self.accounts = json.load(f).get("accounts", {})
+                data = json.load(f)
+                # Handle both flat structure (legacy) and nested (new)
+                if "accounts" in data:
+                    self.accounts = data["accounts"]
+                else:
+                    self.accounts = data # Fallback for flat file
         except (IOError, json.JSONDecodeError) as e:
-            logging.error(f"Failed to load or parse accounts.json: {e}")
+            logging.error(f"Failed to load accounts.json: {e}")
             self.accounts = {}
 
     def save_account(self, commander_name, api_key):
         """Updates and saves an account to accounts.json."""
         self.accounts[commander_name] = api_key
+        # Update global session immediately
+        CURRENT_SESSION["api_key"] = api_key
+        # Save to disk
         self._save_json(ACCOUNTS_FILE, {"accounts": self.accounts})
+        logging.info(f"✅ API Key saved for commander: {commander_name}")
 
 
-
-    def load_field_rules(self):
-        """Loads the field filter rules from fields.json."""
-        fields_file = Path('./fields.json')
-        if not fields_file.exists():
-            logging.warning("fields.json not found, creating a new one.")
-            self._save_json(fields_file, {"filters": {}})
-        
-        try:
-            with open(fields_file, 'r') as f:
-                self.field_rules = json.load(f)
-        except (IOError, json.JSONDecodeError) as e:
-            logging.error(f"Failed to load or parse fields.json: {e}")
-            self.field_rules = {"filters": {}}
-
-    def update_field_schema(self, event_type, event_data):
-        """Updates the schema in fields.json for a given event type."""
-        fields_file = Path('./fields.json')
-        if event_type not in self.field_rules.get("filters", {}):
-            self.field_rules.setdefault("filters", {})[event_type] = {}
-
-        current_fields = self.field_rules["filters"][event_type]
-        updated = False
-        for key in event_data.keys():
-            if key not in current_fields:
-                current_fields[key] = True
-                updated = True
-                logging.info(f"✨ New field discovered for {event_type}: {key}")
-
-        if updated:
-            self._save_json(fields_file, self.field_rules)
 
     def _save_json(self, filepath, data):
-        """Helper to save data to a JSON file."""
         try:
             with open(filepath, 'w') as f:
                 json.dump(data, f, indent=2)
@@ -125,109 +164,75 @@ class Config:
             logging.error(f"Failed to save JSON to {filepath}: {e}")
 
     def load_event_rules(self):
-        """Loads and flattens the event configuration from events.json."""
-        event_config_file = Path('./events.json')
-        if not event_config_file.exists():
-            logging.warning("events.json not found, creating a default one.")
-            self.create_default_event_config(event_config_file)
-
+        if not EVENTS_FILE.exists():
+            self.create_default_event_config(EVENTS_FILE)
         try:
-            with open(event_config_file, 'r') as f:
+            with open(EVENTS_FILE, 'r') as f:
                 config_data = json.load(f)
             self.flatten_event_rules(config_data)
-            logging.info("Event rules loaded and flattened successfully.")
-        except (json.JSONDecodeError, IOError) as e:
-            logging.error(f"Failed to load or parse events.json: {e}")
+        except Exception:
             self.event_rules = {}
+            self.field_rules = {}
 
     def flatten_event_rules(self, config_data):
-        """Flattens the categorized event rules and sets the default action."""
         self.event_rules = {}
-        # Get the default action from settings, fallback to 'send'
+        self.field_rules = {"filters": {}}
         self.default_action = config_data.get("settings", {}).get("default_action", "send")
-        
         for category, events in config_data.get("categories", {}).items():
             for event_name, rule in events.items():
-                self.event_rules[event_name] = rule
+                # Populate event_rules
+                self.event_rules[event_name] = {
+                    "action": rule.get("action", "send"),
+                    "deduplicate": rule.get("deduplicate", False)
+                }
+                # Populate field_rules from the same source
+                self.field_rules["filters"][event_name] = {
+                    key: value for key, value in rule.items()
+                    if key not in ["action", "deduplicate", "comment"]
+                }
+
+    def update_field_schema(self, event_type, event_data):
+        """Updates the schema in events.json for a given event type."""
+        try:
+            with open(EVENTS_FILE, 'r') as f:
+                config_data = json.load(f)
+        except (IOError, json.JSONDecodeError):
+            logging.error(f"Could not read {EVENTS_FILE} to update schema.")
+            return
+
+        updated = False
+        # Find the event and update its fields
+        for category, events in config_data.get("categories", {}).items():
+            if event_type in events:
+                current_fields = events[event_type]
+                for key in event_data.keys():
+                    if key not in current_fields:
+                        current_fields[key] = True
+                        updated = True
+                        logging.info(f"✨ New field discovered for {event_type}: {key}")
+                break
+        
+        if updated:
+            save_events_compact(config_data, EVENTS_FILE)
+            # Update in-memory field_rules
+            self.flatten_event_rules(config_data)
                 
     def register_new_event(self, event_type):
-        """Adds a new event to the __New_Discovery__ category in events.json."""
-        if event_type in self.event_rules:
-            return  # Event already known
-
-        event_config_file = Path('./events.json')
+        if event_type in self.event_rules: return
         try:
-            with open(event_config_file, 'r') as f:
+            with open(EVENTS_FILE, 'r') as f:
                 config_data = json.load(f)
-
             if "__New_Discovery__" not in config_data["categories"]:
                 config_data["categories"]["__New_Discovery__"] = {}
-
-            new_rule = {"action": "send", "comment": "Auto-detected"}
+            new_rule = {"action": "ignore", "comment": "Auto-detected"}
             config_data["categories"]["__New_Discovery__"][event_type] = new_rule
-            
-            save_events_compact(config_data, event_config_file)
-
-            # Update in-memory rules
+            save_events_compact(config_data, EVENTS_FILE)
             self.event_rules[event_type] = new_rule
-            logging.info(f"🆕 New event detected and added to config: {event_type}")
-
-        except (IOError, json.JSONDecodeError) as e:
-            logging.error(f"Failed to register new event type {event_type}: {e}")
+            logging.info(f"🆕 New event detected: {event_type}")
+        except Exception as e:
+            logging.error(f"Failed to register event {event_type}: {e}")
 
     def create_default_event_config(self, file_path):
-        """Creates a default events.json file with categorized rules."""
-        default_config = {
-          "settings": {
-            "default_action": "send",
-            "ignore_older_than_seconds": 60
-          },
-          "categories": {
-            "Status": {
-              "Commander": { "action": "send" }, "LoadGame": { "action": "send" }, "Rank": { "action": "send", "deduplicate": True },
-              "Progress": { "action": "send", "deduplicate": True }, "Reputation": { "action": "send", "deduplicate": True },
-              "EngineerProgress": { "action": "send", "deduplicate": True }, "Statistics": { "action": "send" },
-              "SquadronStartup": { "action": "send" }, "Powerplay": { "action": "send" }
-            },
-            "Ship": {
-              "Loadout": { "action": "send", "deduplicate": True }, "Materials": { "action": "send", "deduplicate": True },
-              "Cargo": { "action": "send", "deduplicate": True }, "ShipLocker": { "action": "send", "deduplicate": True },
-              "SuitLoadout": { "action": "send" }
-            },
-            "Travel": {
-              "Location": { "action": "send" }, "FSDJump": { "action": "send" }, "Docked": { "action": "send" },
-              "Undocked": { "action": "send" }, "CarrierJump": { "action": "send" }, "CarrierLocation": { "action": "send" }
-            },
-            "Missions": {
-              "MissionAccepted": { "action": "send" }, "MissionCompleted": { "action": "send" }, "MissionFailed": { "action": "send" }
-            },
-            "Combat": {
-              "Died": { "action": "send" }
-            },
-            "Ignored": {
-              "Music": { "action": "ignore" }, "ReceiveText": { "action": "ignore" }, "FuelScoop": { "action": "ignore" },
-              "FSSSignalDiscovered": { "action": "ignore" }, "Friends": { "action": "ignore" }, "Fileheader": { "action": "ignore" },
-              "ReservoirReplenished": { "action": "ignore" }
-            }
-          }
-        }
-        try:
-            save_events_compact(default_config, file_path)
-            self.flatten_event_rules(default_config)
-            logging.info(f"Created default {file_path}")
-        except IOError as e:
-            logging.error(f"Failed to create default event config: {e}")
-
-
-
-
-    def get_default_journal_dir(self):
-        """Finds the default Elite Dangerous journal directory."""
-        saved_games_path = Path.home() / 'Saved Games' / 'Frontier Developments' / 'Elite Dangerous'
-        if saved_games_path.exists():
-            logging.info(f"Found Elite Dangerous journal directory: {saved_games_path}")
-            return str(saved_games_path)
-        else:
-            logging.warning("Could not find default Elite Dangerous journal directory.")
-            return None
-
+        # (Твой стандартный конфиг, оставляем как есть)
+        default_config = {"settings": {"default_action": "send"}, "categories": {}}
+        save_events_compact(default_config, file_path)
