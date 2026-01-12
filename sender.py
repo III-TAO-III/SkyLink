@@ -65,6 +65,37 @@ class Sender(threading.Thread):
             self.status_callback(status, message)
         logging.info(f"Status: {status} - {message}")
 
+    @staticmethod
+    def purge_commander_cache(commander_name, cache_path):
+        """Removes all cache entries for a given commander."""
+        if not cache_path.exists():
+            return
+
+        try:
+            with open(cache_path, 'r') as f:
+                content = f.read()
+                if not content:
+                    hashes = {}
+                else:
+                    hashes = json.loads(content)
+        except (IOError, json.JSONDecodeError):
+            return
+
+        keys_to_delete = [key for key in hashes if key.startswith(f"{commander_name}|")]
+        
+        if not keys_to_delete:
+            return
+
+        for key in keys_to_delete:
+            del hashes[key]
+
+        try:
+            with open(cache_path, 'w') as f:
+                json.dump(hashes, f, indent=2)
+            logging.info(f"Cache purged for commander: {commander_name}")
+        except IOError:
+            logging.error(f"Failed to save purged cache for commander: {commander_name}")
+
     def queue_event(self, event):
         """Adds an event to the processing queue."""
         self.event_queue.put(event)

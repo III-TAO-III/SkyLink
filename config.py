@@ -154,6 +154,13 @@ class Config:
         self._save_json(ACCOUNTS_FILE, {"accounts": self.accounts})
         logging.info(f"✅ API Key saved for commander: {commander_name}")
 
+    def delete_account(self, commander_name):
+        """Deletes an account from accounts.json."""
+        if commander_name in self.accounts:
+            del self.accounts[commander_name]
+            self._save_json(ACCOUNTS_FILE, {"accounts": self.accounts})
+            logging.info(f"🗑️ Account deleted for commander: {commander_name}")
+
 
 
     def _save_json(self, filepath, data):

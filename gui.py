@@ -13,6 +13,7 @@ from PIL import Image, ImageDraw
 from config import Config, CURRENT_SESSION, UI_STATE
 from utils import verify_api_key
 from main import start_background_service, stop_background_service
+from sender import Sender
 
 # --- Theme Setup ---
 COLOR_BG = "#0a0a0f"
@@ -65,26 +66,55 @@ def apply_taskbar_fix(window_id):
 
 class AccountRow(ctk.CTkFrame):
     """Компонент строки аккаунта."""
-    def __init__(self, master, name, api_key, app):
+    def __init__(self, master, name, api_key, app, is_new=False):
         super().__init__(master, fg_color="transparent")
         self.app = app
         self.commander_name = name
+        self.is_new = is_new
         
         self.grid_columnconfigure(1, weight=1)
 
         # Name
         self.lbl_name = ctk.CTkLabel(self, text=name, font=("Roboto Medium", 14), text_color=COLOR_TEXT_WHITE, anchor="w")
-        self.lbl_name.grid(row=0, column=0, padx=10, pady=5, sticky="w")
+        self.lbl_name.grid(row=0, column=0, padx=10, pady=(6, 2), sticky="w")
+        
+        separator = ctk.CTkFrame(self, height=1, fg_color="#1f1f23")
+        separator.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(2, 0))
 
         # Status/Actions Container
         self.status_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.status_frame.grid(row=0, column=1, padx=5, sticky="e")
         
-        self.lbl_status = ctk.CTkLabel(self.status_frame, text="API KEY LINKED ✓", text_color=COLOR_GREEN, font=("Arial", 11, "bold"))
+        self.lbl_status = ctk.CTkLabel(self.status_frame, text="LINKED ✓", text_color=COLOR_GREEN, font=("Consolas", 11, "bold"))
         self.lbl_status.pack(side="left", padx=10)
 
         self.btn_change = ctk.CTkButton(self.status_frame, text="CHANGE API", width=80, height=24, fg_color="#27272a", hover_color=COLOR_ACCENT, command=self.show_edit_mode)
-        self.btn_change.pack(side="left")
+        self.btn_change.pack(side="left", padx=5)
+
+        self.btn_delete = ctk.CTkButton(
+            self.status_frame, 
+            text="✕", 
+            width=30, 
+            height=30, 
+            fg_color="transparent", 
+            text_color="#555555",
+            font=("Arial", 16, "bold"),
+            hover_color="#ef4444", 
+            command=self.show_confirm_delete
+        )
+        self.btn_delete.pack(side="left")
+        
+        # Confirmation Mode Container
+        self.confirm_frame = ctk.CTkFrame(self, fg_color="transparent")
+        
+        lbl_confirm = ctk.CTkLabel(self.confirm_frame, text="Delete?", text_color=COLOR_TEXT_GRAY)
+        lbl_confirm.pack(side="left", padx=10)
+        
+        btn_yes = ctk.CTkButton(self.confirm_frame, text="YES", width=60, fg_color=COLOR_RED, hover_color="#B91C1C", command=self.confirm_delete)
+        btn_yes.pack(side="left", padx=5)
+        
+        btn_no = ctk.CTkButton(self.confirm_frame, text="NO", width=60, fg_color="#333333", hover_color="#444444", command=self.show_view_mode)
+        btn_no.pack(side="left")
 
         # Edit Mode Container
         self.edit_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -96,8 +126,14 @@ class AccountRow(ctk.CTkFrame):
         self.btn_save = ctk.CTkButton(self.edit_frame, text="SAVE", width=60, height=28, fg_color=COLOR_ACCENT, hover_color="#c2410c", command=self.save_key)
         self.btn_save.pack(side="left", padx=5)
 
-        self.btn_cancel = ctk.CTkButton(self.edit_frame, text="✕", width=30, height=28, fg_color="#333333", hover_color="#444444", command=self.show_view_mode)
+        self.btn_cancel = ctk.CTkButton(self.edit_frame, text="✕", width=30, height=28, fg_color="#333333", hover_color="#444444", command=self.cancel_edit)
         self.btn_cancel.pack(side="left")
+
+    def cancel_edit(self):
+        if self.is_new:
+            self.destroy()
+        else:
+            self.show_view_mode()
 
     def show_edit_mode(self):
         self.status_frame.grid_forget()
@@ -105,7 +141,19 @@ class AccountRow(ctk.CTkFrame):
 
     def show_view_mode(self):
         self.edit_frame.grid_forget()
+        self.confirm_frame.grid_forget()
         self.status_frame.grid(row=0, column=1, padx=5, sticky="e")
+
+    def show_confirm_delete(self):
+        self.status_frame.grid_forget()
+        self.edit_frame.grid_forget()
+        self.confirm_frame.grid(row=0, column=1, padx=5, sticky="e")
+
+    def confirm_delete(self):
+        cache_file = self.app.config.app_data_dir / 'deduplication_cache.json'
+        self.app.config.delete_account(self.commander_name)
+        Sender.purge_commander_cache(self.commander_name, cache_file)
+        self.destroy()
 
     def save_key(self):
         if not self.winfo_exists(): return
@@ -210,7 +258,17 @@ class SkyLinkGUI(ctk.CTk):
         self.footer = ctk.CTkFrame(self.inner_frame, fg_color="transparent", height=40)
         self.footer.pack(side="bottom", fill="x", padx=15, pady=10)
         
-        self.btn_add = ctk.CTkButton(self.footer, text="+ Add Account", fg_color="#27272a", hover_color=COLOR_ACCENT, width=110, command=self.add_manual_account)
+        self.btn_add = ctk.CTkButton(
+            self.footer, 
+            text="+ Add Account", 
+            fg_color="#18181b", 
+            border_width=1, 
+            border_color="#3f3f46", 
+            text_color="#9ca3af", 
+            hover_color=COLOR_ACCENT, 
+            width=110, 
+            command=self.add_manual_account
+        )
         self.btn_add.pack(side="left")
         
         self.lbl_footer_status = ctk.CTkLabel(self.footer, text="Initializing...", text_color=COLOR_TEXT_GRAY, font=("Arial", 11))
@@ -236,7 +294,12 @@ class SkyLinkGUI(ctk.CTk):
 
         # Scroll List
         ctk.CTkLabel(self.body_frame, text="REGISTERED ACCOUNTS:", text_color=COLOR_TEXT_GRAY, font=("Arial", 10)).pack(anchor="w", padx=10)
-        self.scroll_frame = ctk.CTkScrollableFrame(self.body_frame, fg_color="transparent")
+        self.scroll_frame = ctk.CTkScrollableFrame(
+            self.body_frame, 
+            fg_color="transparent",
+            scrollbar_button_color="#1a1a1a",
+            scrollbar_button_hover_color="#333333"
+        )
         self.scroll_frame.pack(fill="both", expand=True, padx=0, pady=5)
 
     # --- Window Moving ---
@@ -354,10 +417,10 @@ class SkyLinkGUI(ctk.CTk):
             ctk.CTkLabel(self.scroll_frame, text="No accounts linked yet.", text_color="gray").pack(pady=10)
         else:
             for name, key in accounts.items():
-                AccountRow(self.scroll_frame, name, key, self).pack(fill="x", pady=2)
+                AccountRow(self.scroll_frame, name, key, self).pack(fill="x", pady=1)
 
     def add_manual_account(self):
-        row = AccountRow(self.scroll_frame, "New Commander", "", self)
+        row = AccountRow(self.scroll_frame, "New Commander", "", self, is_new=True)
         row.pack(fill="x", pady=2)
         row.show_edit_mode()
 
