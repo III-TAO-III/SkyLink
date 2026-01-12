@@ -1,5 +1,6 @@
 import hashlib
 import json
+import requests
 import logging
 
 def calculate_hash(data, exclude_keys=None):
@@ -79,3 +80,39 @@ if __name__ == '__main__':
     json_line = '{"event": "Test", "data": "some_data"}'
     parsed_json = parse_json_line(json_line)
     print(f"Parsed JSON: {parsed_json}")
+
+def verify_api_key(api_key, api_url):
+    """
+    Verifies the API key with the server and returns the associated Commander Name.
+    Returns: (is_valid, commander_name_or_error)
+    """
+    if not api_key or not api_url:
+        return False, "Missing API Key or URL"
+
+    # Формируем URL для проверки (добавляем /verify к базовому API URL)
+    # Если базовый URL заканчивается на /skylink, то получится /skylink/verify
+    # Убираем слеш в конце base_url, если он есть, чтобы не было //verify
+    base_url = api_url.rstrip('/')
+    verify_url = f"{base_url}/verify"
+
+    try:
+        response = requests.get(
+            verify_url, 
+            headers={"x-api-key": api_key},
+            timeout=5
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("valid"):
+                return True, data.get("commander")
+            else:
+                return False, "Key is invalid (Server rejected)"
+        elif response.status_code == 401:
+            return False, "Invalid API Key"
+        else:
+            return False, f"Server Error: {response.status_code}"
+
+    except Exception as e:
+        logging.error(f"Verification failed: {e}")
+        return False, "Connection Error"

@@ -5,6 +5,8 @@ import logging
 import queue
 import threading
 import time
+import hashlib
+import json
 from utils import calculate_hash, filter_event_fields
 from config import CURRENT_SESSION
 
@@ -97,12 +99,23 @@ class Sender(threading.Thread):
         # 3. Handle deduplication based on event rules
         rule = self.config.event_rules.get(event_type)
         if rule and rule.get('deduplicate'):
-            # Important: Hash the *filtered* event
-            event_hash = calculate_hash(filtered_event, exclude_keys=['timestamp'])
-            if self.hashes.get(event_type) == event_hash:
-                logging.info(f"Skipping duplicate event: {event_type}")
+            commander_name = CURRENT_SESSION.get("commander", "Unknown")
+            
+            # Create a composite key for the cache
+            cache_key = f"{commander_name}|{event_type}"
+            
+            # Create a copy for hashing, excluding volatile fields
+            content_to_hash = filtered_event.copy()
+            content_to_hash.pop("timestamp", None)
+            content_to_hash.pop("event", None)
+
+            content_str = f"{commander_name}|{json.dumps(content_to_hash, sort_keys=True)}"
+            event_hash = hashlib.sha256(content_str.encode('utf-8')).hexdigest()
+
+            if self.hashes.get(cache_key) == event_hash:
+                logging.info(f"Skipping duplicate event for {commander_name}: {event_type}")
                 return
-            self.hashes[event_type] = event_hash
+            self.hashes[cache_key] = event_hash
             self.save_hashes()
 
         # 4. Send the filtered event
