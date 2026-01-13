@@ -180,17 +180,17 @@ class AccountRow(ctk.CTkFrame):
             self.app.update()
         except: return
 
+        # 1. Проверяем ключ на сервере
         is_valid, result_name = verify_api_key(new_key, self.app.config.API_URL)
 
         if is_valid:
-            if result_name == self.commander_name or self.commander_name == "New Commander":
-                self.app.config.save_account(result_name, new_key)
-                self.app.refresh_account_list()
-            else:
-                self.entry_key.delete(0, "end")
-                self.entry_key.configure(placeholder_text=f"Wrong Pilot: {result_name}")
-                self.btn_save.configure(text="SAVE", state="normal")
+            # 2. УСПЕХ!
+            # Мы не сравниваем имена. Мы просто берем то имя, которое вернул сервер (result_name),
+            # и сохраняем аккаунт под этим именем.
+            self.app.config.save_account(result_name, new_key)
+            self.app.refresh_account_list() # Обновляем список, чтобы увидеть нового пилота
         else:
+            # 3. ОШИБКА
             self.entry_key.delete(0, "end")
             self.entry_key.configure(placeholder_text="Invalid Key")
             self.btn_save.configure(text="SAVE", state="normal")

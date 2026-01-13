@@ -5,7 +5,7 @@ a = Analysis(
     ['gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('C:\\Users\\alxsk\\Рабочий стол\\sky-link-client\\venv\\Lib\\site-packages\\customtkinter', 'customtkinter'), ('events.json', '.')],
+    datas=[('C:\\Users\\alxsk\\Рабочий стол\\sky-link-client\\venv\\Lib\\site-packages\\customtkinter', 'customtkinter'), ('events.json', '.'), ('icon.ico', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
