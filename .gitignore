@@ -1,13 +1,28 @@
-# Python garbage
+# --- Python & Venv ---
 __pycache__/
 *.py[cod]
 venv/
 .env
 
-# Logs and Caches
-*.log
-deduplication_cache.json
+# --- PyInstaller (Сборка) ---
+# Это мусорные папки, их нельзя грузить
+build/
+dist/
+*.spec
 
-# System
+# --- User Data & Security (КРИТИЧНО!) ---
+# Эти файлы содержат твои ключи и историю. Их нельзя светить.
+accounts.json
+discovery.json
+deduplication_cache.json
+*.log
+
+# --- Binaries ---
+# Готовые экзешники не хранят в коде
+*.exe
+
+# --- System & IDE ---
 .DS_Store
 Thumbs.db
+.vscode/
+.idea/
