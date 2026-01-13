@@ -182,7 +182,27 @@ class Sender(threading.Thread):
         # Берем имя текущего пилота ИЗ СЕССИИ. Это самый надежный источник.
         cmdr_name = CURRENT_SESSION.get("commander", "Unknown")
 
-        if not CURRENT_SESSION["api_key"]:
+        # --- НАЧАЛО ИЗМЕНЕНИЙ (Умный поиск ключа) ---
+        api_key = CURRENT_SESSION.get("api_key")
+
+        # 1. Если ключа нет в сессии, ищем в памяти конфига
+        if not api_key:
+            api_key = self.config.accounts.get(cmdr_name)
+
+        # 2. ФИНАЛЬНЫЙ АРГУМЕНТ: Если ключа всё еще нет — возможно, конфиг устарел?
+        # Читаем файл с диска прямо сейчас!
+        if not api_key:
+            # logging.info(f"Key not found in memory for {cmdr_name}, checking disk...") # Можно раскомментировать для отладки
+            self.config.load_accounts() # <--- ПРИНУДИТЕЛЬНАЯ ПЕРЕЗАГРУЗКА
+            api_key = self.config.accounts.get(cmdr_name)
+
+            # Если нашли после перезагрузки — обновляем сессию
+            if api_key:
+                CURRENT_SESSION["api_key"] = api_key
+                logging.info(f"🔑 Key loaded from disk for: {cmdr_name}")
+
+        # 3. Если и теперь нет — значит, ключа реально нет
+        if not api_key:
             logging.warning(f"Cannot send event: No active API Key for commander {cmdr_name}")
             return
 
@@ -193,7 +213,7 @@ class Sender(threading.Thread):
         headers = {
             'Content-Type': 'application/json',
             'User-Agent': self.config.USER_AGENT,
-            'x-api-key': CURRENT_SESSION["api_key"],
+            'x-api-key': api_key,    # <--- ИСПОЛЬЗУЕМ НАЙДЕННЫЙ ПЕРЕМЕННУЮ api_key
             'x-commander': cmdr_name
         }
 

@@ -5,9 +5,6 @@ import logging
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
 # Load environment variables from .env file
 load_dotenv()
 
@@ -23,9 +20,30 @@ USER_AGENT = "SkyLink-Client/1.0"
 # --- Paths ---
 # User data is stored in AppData (Windows standard)
 APPDATA_DIR = Path(os.getenv('APPDATA')) / 'SkyLink'
-APPDATA_DIR.mkdir(parents=True, exist_ok=True)
+APPDATA_DIR.mkdir(parents=True, exist_ok=True) # Создаем папку
+
 ACCOUNTS_FILE = APPDATA_DIR / 'accounts.json'
 DISCOVERY_FILE = APPDATA_DIR / 'discovery.json'
+LOG_FILE = APPDATA_DIR / 'skylink_client.log' # <-- Новый файл для логов
+
+# --- Configure Logging ---
+# Настраиваем логгер здесь, ПОСЛЕ создания путей.
+# Мы создаем список "хендлеров" — куда сливать информацию.
+log_handlers = [
+    logging.StreamHandler(sys.stdout) # 1. Консоль (как было раньше)
+]
+
+# 2. Файл (добавляем всегда, чтобы и в Dev, и в EXE можно было почитать историю)
+try:
+    log_handlers.append(logging.FileHandler(LOG_FILE, encoding='utf-8', mode='a'))
+except Exception as e:
+    print(f"Warning: Could not set up file logging: {e}")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=log_handlers # Применяем оба канала
+)
 
 # --- Globals ---
 # Global session state
