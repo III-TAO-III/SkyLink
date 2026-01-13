@@ -12,7 +12,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 load_dotenv()
 
 # --- Constants ---
-API_URL = os.getenv("SKYLINK_API_URL")
+# Жестко прописанный адрес для тех, у кого нет .env (твоего друга)
+DEFAULT_API_URL = "http://192.168.10.37:3000/api/telemetry/skylink"
+
+# Если в системе нет переменной (как в EXE), берем адрес выше
+API_URL = os.getenv("SKYLINK_API_URL", DEFAULT_API_URL)
+
 USER_AGENT = "SkyLink-Client/1.0"
 
 # --- Paths ---
