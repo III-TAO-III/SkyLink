@@ -3,3 +3,6 @@ watchdog
 requests
 Pillow
 python-dotenv
+customtkinter
+pyinstaller
+tendo

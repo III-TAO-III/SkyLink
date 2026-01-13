@@ -1,5 +1,6 @@
 import customtkinter as ctk
 import threading
+import os
 import sys
 import webbrowser
 import logging
@@ -8,6 +9,8 @@ import ctypes
 import math
 import time
 from PIL import Image, ImageDraw
+from tendo import singleton
+import sys
 
 # Импорты логики
 from config import Config, CURRENT_SESSION, UI_STATE
@@ -201,6 +204,16 @@ class AccountRow(ctk.CTkFrame):
             # Иначе — все ок (мы не проверяем "LINKED" каждую секунду, считаем что ок)
             self.lbl_status.configure(text="LINKED ✓", text_color=COLOR_GREEN)
 
+def resource_path(relative_path):
+    """ Получает абсолютный путь к ресурсу, работает и для dev, и для PyInstaller """
+    try:
+        # PyInstaller создает временную папку и хранит путь в _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+
 class SkyLinkGUI(ctk.CTk):
     def __init__(self, config):
         super().__init__()
@@ -214,7 +227,20 @@ class SkyLinkGUI(ctk.CTk):
         self.overrideredirect(True)
         self.geometry("640x420")
         self.configure(fg_color=COLOR_BORDER)
+        self.title("SkyLink Agent")
         self.center_window()
+
+        # 1.1. Иконка
+        myappid = 'skybioml.skylink.agent.1.0' 
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        
+        try:
+            icon_path = resource_path("icon.ico")
+            self.iconbitmap(icon_path)
+        except Exception as e:
+            print(f"Icon load error: {e}") # В консоли увидим, если что не так
+
+        self.running = True
 
         # 2. EVENT BINDING: Это правильный способ починить Taskbar.
         # Мы говорим: "Как только окно появится (<Map>), примени фикс".
@@ -469,6 +495,13 @@ class SkyLinkGUI(ctk.CTk):
         row.show_edit_mode()
 
 if __name__ == "__main__":
+    # 1. Сначала проверяем, не запущены ли мы уже
+    try:
+        me = singleton.SingleInstance() 
+    except singleton.SingleInstanceException:
+        sys.exit() # Если копия есть — сразу выходим, ничего не запуская
+
+    # 2. Если мы одни — начинаем работу
     config = Config()
     
     bg_thread = threading.Thread(target=start_background_service, daemon=True)
