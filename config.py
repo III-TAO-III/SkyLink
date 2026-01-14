@@ -4,6 +4,7 @@ import json
 import logging
 from pathlib import Path
 from dotenv import load_dotenv
+from logging.handlers import RotatingFileHandler
 
 # Load environment variables from .env file
 load_dotenv()
@@ -35,7 +36,7 @@ log_handlers = [
 
 # 2. Файл (добавляем всегда, чтобы и в Dev, и в EXE можно было почитать историю)
 try:
-    log_handlers.append(logging.FileHandler(LOG_FILE, encoding='utf-8', mode='a'))
+    log_handlers.append(RotatingFileHandler(LOG_FILE, maxBytes=5*1024*1024, backupCount=2, encoding='utf-8'))
 except Exception as e:
     print(f"Warning: Could not set up file logging: {e}")
 

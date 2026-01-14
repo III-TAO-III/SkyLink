@@ -392,6 +392,7 @@ class SkyLinkGUI(ctk.CTk):
         fill_map = {
             "red": (239, 68, 68),
             "green": (34, 197, 94),
+            "yellow": (255, 193, 7),
             "gray": (100, 100, 100)
         }
         fill = fill_map.get(color, (100, 100, 100))
@@ -423,59 +424,67 @@ class SkyLinkGUI(ctk.CTk):
 
     # --- Animation & Loop ---
     def update_ui_loop(self):
-        if not self.running or not self.winfo_exists(): return
+        # Если флаг выключения поднят или окна уже нет — выходим сразу
+        if not self.running or not self.winfo_exists(): 
+            return
         
-        # 1. Active Commander
-        current_cmdr = CURRENT_SESSION.get("commander")
-        if current_cmdr:
-            self.lbl_commander.configure(text=current_cmdr)
-            self.lbl_active_status.configure(text="CONNECTED ●", text_color=COLOR_GREEN)
-        else:
-            self.lbl_commander.configure(text="WAITING FOR SIGNAL...")
-            self.lbl_active_status.configure(text="", text_color="gray")
-
-        # --- НОВЫЙ БЛОК: Обновление статусов авторизации ---
-        # Пробегаем по всем строкам в списке и просим их проверить статус
         try:
+            # 1. Получаем текущее состояние
+            status_text = UI_STATE.get("status", "Idle")
+            st_lower = status_text.lower()
+            current_cmdr = CURRENT_SESSION.get("commander")
+
+            # 2. Обновляем блок активного пилота
+            if current_cmdr:
+                self.lbl_commander.configure(text=current_cmdr)
+                
+                # Мягкая проверка статуса
+                if "waiting" in st_lower or "standby" in st_lower or "closed" in st_lower:
+                    self.lbl_active_status.configure(text="STANDBY ●", text_color="#FFC107")
+                elif "error" in st_lower or "failed" in st_lower or "invalid" in st_lower or "network" in st_lower:
+                    self.lbl_active_status.configure(text="ERROR ●", text_color=COLOR_RED)
+                else:
+                    self.lbl_active_status.configure(text="CONNECTED ●", text_color=COLOR_GREEN)
+            else:
+                self.lbl_commander.configure(text="WAITING FOR SIGNAL...")
+                self.lbl_active_status.configure(text="", text_color="gray")
+
+            # 3. Обновляем статусы авторизации в списке
+            # (Тут свой try/except не нужен, общий поймает)
             for widget in self.scroll_frame.winfo_children():
                 if isinstance(widget, AccountRow):
                     widget.update_auth_status()
-        except Exception:
-            pass # Защита от перерисовки в момент итерации
-        
-        # 2. Status & Tray Color (Direct Logic)
-        status_text = UI_STATE.get("status", "Idle")
-        
-        # Жесткая логика определения цвета по тексту (Truth Source)
-        target_color = "gray"
-        st_lower = status_text.lower()
-        
-        if "running" in st_lower or "sent" in st_lower or "monitoring" in st_lower:
-            target_color = "green"
-        elif "error" in st_lower or "failed" in st_lower or "invalid" in st_lower:
-            target_color = "red"
             
-        self.lbl_footer_status.configure(text=f"STATUS: {status_text}")
-        
-        if self.tray_icon and target_color != self.last_tray_color:
-            self.tray_icon.icon = self.create_tray_image(target_color)
-            self.last_tray_color = target_color
+            # 4. Логика цвета Трея
+            target_color = "gray"
+            if "waiting" in st_lower or "standby" in st_lower or "closed" in st_lower:
+                target_color = "yellow"
+            elif "running" in st_lower or "sent" in st_lower or "monitoring" in st_lower:
+                target_color = "green"
+            elif "error" in st_lower or "failed" in st_lower or "invalid" in st_lower:
+                target_color = "red"
+                
+            self.lbl_footer_status.configure(text=f"STATUS: {status_text}")
+            
+            if self.tray_icon and target_color != self.last_tray_color:
+                self.tray_icon.icon = self.create_tray_image(target_color)
+                self.last_tray_color = target_color
 
-        # 3. Pulsation Logic (Math based)
-        # Меняем цвет текста кнопки от #ffcccc до #ff0000 (условно)
-        # t меняется от 0 до 1 по синусу
-        self.pulse_phase += 0.15
-        t = (math.sin(self.pulse_phase) + 1) / 2 # Normalize -1..1 to 0..1
-        
-        # Интерполяция для цвета текста
-        new_text_color = lerp_color((255, 200, 200), (255, 100, 100), t)
-        # Интерполяция для границы (от тусклого к яркому)
-        new_border_color = lerp_color((90, 32, 32), (220, 40, 40), t)
-        
-        self.btn_portal.configure(text_color=new_text_color, border_color=new_border_color)
+            # 5. Пульсация (Вот здесь раньше падало)
+            self.pulse_phase += 0.15
+            t = (math.sin(self.pulse_phase) + 1) / 2
+            new_text_color = lerp_color((255, 200, 200), (255, 100, 100), t)
+            new_border_color = lerp_color((90, 32, 32), (220, 40, 40), t)
+            
+            self.btn_portal.configure(text_color=new_text_color, border_color=new_border_color)
 
-        # Loop at 50ms (20 FPS) for smooth animation
-        self.after(50, self.update_ui_loop)
+            # Запускаем снова через 50 мс
+            self.after(50, self.update_ui_loop)
+
+        except (KeyboardInterrupt, RuntimeError, Exception):
+            # Если возникла ошибка (например, окно уничтожено во время анимации)
+            # Мы просто выходим из цикла. Это норма при закрытии.
+            pass
 
     def refresh_account_list(self):
         if not self.winfo_exists(): return

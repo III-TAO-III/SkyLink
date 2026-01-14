@@ -50,13 +50,20 @@ def start_background_service():
 
 def stop_background_service():
     """Stops the background services gracefully."""
+    # Объявляем глобальные переменные, чтобы Python знал, к чему мы обращаемся
+    global watcher, sender 
+
     logging.info("🛑 Stopping SkyLink background service...")
+    
+    # 1. Сначала подаем сигнал остановки
     if watcher:
         watcher.stop()
     if sender:
         sender.stop()
-        sender.join()
-    logging.info("✅ Background services stopped.")
-
-if __name__ == '__main__':
-    start_background_service()
+        
+    # 2. Ждем завершения, НО НЕ ДОЛЬШЕ 1 секунды
+    
+    if sender:
+        sender.join(timeout=1.0) # <--- ВОТ СПАСЕНИЕ ОТ ЗАВИСАНИЯ
+        
+    logging.info("✅ Background services stopped (or forced).")

@@ -181,27 +181,35 @@ class Sender(threading.Thread):
         """Sends a single event to the API with dynamic, session-based headers."""
         # Берем имя текущего пилота ИЗ СЕССИИ. Это самый надежный источник.
         cmdr_name = CURRENT_SESSION.get("commander", "Unknown")
-
-        # --- НАЧАЛО ИЗМЕНЕНИЙ (Умный поиск ключа) ---
         api_key = CURRENT_SESSION.get("api_key")
 
-        # 1. Если ключа нет в сессии, ищем в памяти конфига
-        if not api_key:
-            api_key = self.config.accounts.get(cmdr_name)
+        # Функция для поиска ключа без учета регистра (Dr.Tellur == DR.TELLUR)
+        def find_key_insensitive(target_name, accounts_dict):
+            # 1. Быстрый поиск (точное совпадение)
+            if target_name in accounts_dict:
+                return accounts_dict[target_name]
+            
+            # 2. Медленный поиск (сравниваем lowercase)
+            target_lower = target_name.lower()
+            for name, key in accounts_dict.items():
+                if name.lower() == target_lower:
+                    return key
+            return None
 
-        # 2. ФИНАЛЬНЫЙ АРГУМЕНТ: Если ключа всё еще нет — возможно, конфиг устарел?
-        # Читаем файл с диска прямо сейчас!
+        # 1. Если ключа нет в сессии, ищем в памяти
         if not api_key:
-            # logging.info(f"Key not found in memory for {cmdr_name}, checking disk...") # Можно раскомментировать для отладки
-            self.config.load_accounts() # <--- ПРИНУДИТЕЛЬНАЯ ПЕРЕЗАГРУЗКА
-            api_key = self.config.accounts.get(cmdr_name)
+            api_key = find_key_insensitive(cmdr_name, self.config.accounts)
 
-            # Если нашли после перезагрузки — обновляем сессию
+        # 2. Если все равно нет — читаем диск и ищем снова
+        if not api_key:
+            self.config.load_accounts() # Перечитываем файл
+            api_key = find_key_insensitive(cmdr_name, self.config.accounts)
+
             if api_key:
                 CURRENT_SESSION["api_key"] = api_key
                 logging.info(f"🔑 Key loaded from disk for: {cmdr_name}")
 
-        # 3. Если и теперь нет — значит, ключа реально нет
+        # 3. Если и теперь нет — сдаемся
         if not api_key:
             logging.warning(f"Cannot send event: No active API Key for commander {cmdr_name}")
             return
@@ -220,25 +228,39 @@ class Sender(threading.Thread):
         try:
             response = requests.post(self.config.API_URL, headers=headers, json=event, timeout=10)
             
-            # --- ЛОГИКА СТАТУСОВ ---
+            # --- 1. УСПЕШНАЯ ОТПРАВКА (200 OK) ---
             if response.status_code == 200:
                 self._log_event_details(event)
-                self.update_status('Running', 'Event sent successfully.')
-                # Если все ок — убираем из черного списка (вдруг починили)
+                
+                # [НОВОЕ] Логика Желтого статуса
+                event_type = event.get('event')
+                if event_type == 'Shutdown':
+                    # Если событие Shutdown — ставим Желтый (Waiting)
+                    logging.info("🛑 Game Shutdown detected. Switching to standby.")
+                    self.update_status('Waiting', 'Game closed. Waiting for Commander...')
+                else:
+                    # Любое другое событие — ставим Зеленый (Running)
+                    self.update_status('Running', 'Event sent successfully.')
+
+                # Раз успех — убираем из черного списка
                 FAILED_ACCOUNTS.discard(cmdr_name)
 
+            # --- 2. ОШИБКА АВТОРИЗАЦИИ (Красный) ---
+            # (Твой код без изменений)
             elif response.status_code in [401, 403]:
-                # 401/403 = Ключ неверный. Баним визуально.
                 logging.error(f"⛔ Auth failed for {cmdr_name} (Status: {response.status_code})")
                 FAILED_ACCOUNTS.add(cmdr_name)
                 self.update_status('Error', f'Auth Error {response.status_code} for {cmdr_name}')
 
+            # --- 3. ОШИБКА СЕРВЕРА (Красный) ---
+            # (Твой код без изменений)
             else:
-                # Другие ошибки (500 и т.д.)
                 logging.error(f"Failed to send event: {response.status_code} - {response.text}")
                 self.offline_queue.put(event)
                 self.update_status('Error', 'Failed to send event, queuing.')
 
+        # --- 4. ОШИБКА СЕТИ (Красный) ---
+        # (Твой код без изменений)
         except requests.RequestException as e:
             logging.error(f"Network error while sending event: {e}")
             self.offline_queue.put(event)
