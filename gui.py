@@ -513,7 +513,8 @@ if __name__ == "__main__":
     # 2. Если мы одни — начинаем работу
     config = Config()
     
-    bg_thread = threading.Thread(target=start_background_service, daemon=True)
+    # Передаем наш config внутрь функции start_background_service
+    bg_thread = threading.Thread(target=start_background_service, args=(config,), daemon=True)
     bg_thread.start()
 
     app = SkyLinkGUI(config)

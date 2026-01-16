@@ -8,7 +8,9 @@ from watcher import JournalWatcher
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Global Instances ---
-config = Config()
+# Убираем жесткое создание Config() здесь. 
+# Пусть config будет None, пока мы его не инициализируем.
+config = None 
 sender = None
 watcher = None
 
@@ -24,15 +26,25 @@ def update_ui_state(status, message):
     else:
         UI_STATE["color"] = "gray"
 
-def start_background_service():
+# --- ИЗМЕНЕНИЕ: Добавляем аргумент shared_config ---
+def start_background_service(shared_config=None):
     """Initializes and starts the background services."""
-    global sender, watcher
+    global sender, watcher, config
 
     logging.info("🚀 Starting SkyLink background service...")
 
+    # Если нам передали конфиг из GUI — используем его.
+    # Если нет (запустили main.py отдельно) — создаем новый.
+    if shared_config:
+        config = shared_config
+    else:
+        config = Config()
+
     cache_file = config.app_data_dir / 'deduplication_cache.json'
+    
+    # Теперь Sender использует ТОТ ЖЕ config, что и GUI
     sender = Sender(cache_path=cache_file, config=config)
-    sender.set_status_callback(update_ui_state)  # Wire the callback
+    sender.set_status_callback(update_ui_state)
     sender.start()
 
     if config.journal_path:
@@ -50,20 +62,19 @@ def start_background_service():
 
 def stop_background_service():
     """Stops the background services gracefully."""
-    # Объявляем глобальные переменные, чтобы Python знал, к чему мы обращаемся
     global watcher, sender 
 
     logging.info("🛑 Stopping SkyLink background service...")
     
-    # 1. Сначала подаем сигнал остановки
     if watcher:
         watcher.stop()
     if sender:
         sender.stop()
         
-    # 2. Ждем завершения, НО НЕ ДОЛЬШЕ 1 секунды
-    
     if sender:
-        sender.join(timeout=1.0) # <--- ВОТ СПАСЕНИЕ ОТ ЗАВИСАНИЯ
+        sender.join(timeout=1.0) 
         
     logging.info("✅ Background services stopped (or forced).")
+
+if __name__ == '__main__':
+    start_background_service()
