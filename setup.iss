@@ -1,7 +1,7 @@
 ; --- НАСТРОЙКИ ПРОЕКТА ---
 #define MyAppName "SkyLink Agent"
 #define MyAppVersion "0.81"
-#define MyAppPublisher "SkyBioML"
+#define MyAppPublisher "TAO"
 #define MyAppURL "https://github.com/III-TAO-III/SkyLink"
 #define MyAppExeName "SkyLinkV0.81.exe"
 
