@@ -1,9 +1,9 @@
 ; --- НАСТРОЙКИ ПРОЕКТА ---
 #define MyAppName "SkyLink Agent"
-#define MyAppVersion "0.7"
+#define MyAppVersion "0.8"
 #define MyAppPublisher "SkyBioML"
 #define MyAppURL "https://github.com/III-TAO-III/SkyLink"
-#define MyAppExeName "SkyLinkV0.7.exe"
+#define MyAppExeName "SkyLinkV0.8.exe"
 
 [Setup]
 ; Уникальный ID приложения (сгенерирован случайно, можно оставить этот)
@@ -17,7 +17,7 @@ AppUpdatesURL={#MyAppURL}
 
 ; Куда сохранять готовый setup.exe (в корень проекта)
 OutputDir=.
-OutputBaseFilename=SkyLink_Setup_v0.7
+OutputBaseFilename=SkyLink_Setup_v0.8
 ; Иконка самого инсталлятора
 SetupIconFile=icon.ico
 
@@ -45,7 +45,7 @@ Name: "startup"; Description: "Запускать SkyLink Agent автомати
 
 [Files]
 ; Откуда берем файлы. Внимание: предполагается, что exe лежит в папке dist
-Source: "dist\SkyLinkV0.7\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\SkyLinkV0.8\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Если иконка нужна отдельно (обычно она уже внутри exe, но на всякий случай)
 Source: "icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
