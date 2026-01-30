@@ -1,7 +1,10 @@
 import customtkinter as ctk
-import threading
+import json
 import os
 import sys
+import threading
+import winreg
+from tkinter import BooleanVar
 import webbrowser
 import logging
 import pystray
@@ -67,6 +70,66 @@ def apply_taskbar_fix(window_id):
     except Exception as e:
         print(f"WinAPI Error: {e}")
 
+
+# --- Автозагрузка Windows (тот же ключ, что в setup.iss: SkyLinkAgent) ---
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+REG_VALUE_NAME = "SkyLinkAgent"
+
+
+def _get_startup_command():
+    """Команда для записи в Run: exe или python + gui.py (в кавычках при пробелах)."""
+    if getattr(sys, "frozen", False):
+        path = sys.executable
+        return f'"{path}"' if " " in path else path
+    return f'"{sys.executable}" "{os.path.abspath(__file__)}"'
+
+
+def is_app_in_startup():
+    """Проверяет, есть ли приложение в автозагрузке (реестр HKCU Run)."""
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_READ)
+        try:
+            winreg.QueryValueEx(key, REG_VALUE_NAME)
+            return True
+        except OSError:
+            return False
+        finally:
+            winreg.CloseKey(key)
+    except OSError:
+        return False
+
+
+def add_app_to_startup():
+    """Добавляет приложение в автозагрузку Windows."""
+    cmd = _get_startup_command()
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE)
+        try:
+            winreg.SetValueEx(key, REG_VALUE_NAME, 0, winreg.REG_SZ, cmd)
+        finally:
+            winreg.CloseKey(key)
+        return True
+    except OSError as e:
+        logging.warning("Could not add to startup: %s", e)
+        return False
+
+
+def remove_app_from_startup():
+    """Удаляет приложение из автозагрузки Windows."""
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE)
+        try:
+            winreg.DeleteValue(key, REG_VALUE_NAME)
+        except FileNotFoundError:
+            pass
+        finally:
+            winreg.CloseKey(key)
+        return True
+    except OSError as e:
+        logging.warning("Could not remove from startup: %s", e)
+        return False
+
+
 class AccountRow(ctk.CTkFrame):
     """Компонент строки аккаунта."""
     def __init__(self, master, name, api_key, app, is_new=False):
@@ -78,7 +141,7 @@ class AccountRow(ctk.CTkFrame):
         self.grid_columnconfigure(1, weight=1)
 
         # Name
-        self.lbl_name = ctk.CTkLabel(self, text=name, font=("Roboto Medium", 14), text_color=COLOR_TEXT_WHITE, anchor="w")
+        self.lbl_name = ctk.CTkLabel(self, text=name, font=("PLAY", 14), text_color=COLOR_TEXT_WHITE, anchor="w")
         self.lbl_name.grid(row=0, column=0, padx=10, pady=(6, 2), sticky="w")
         
         # 2. Разделитель
@@ -91,7 +154,7 @@ class AccountRow(ctk.CTkFrame):
         self.status_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.status_frame.grid(row=0, column=1, padx=5, sticky="e")
         
-        self.lbl_status = ctk.CTkLabel(self.status_frame, text="LINKED ✓", text_color=COLOR_GREEN, font=("Consolas", 11, "bold"))
+        self.lbl_status = ctk.CTkLabel(self.status_frame, text="LINKED ✓", text_color=COLOR_GREEN, font=("PLAY", 11, "bold"))
         self.lbl_status.pack(side="left", padx=10)
 
         self.btn_change = ctk.CTkButton(self.status_frame, text="CHANGE API", width=90, height=24, fg_color="transparent", border_width=1, border_color="#333333", text_color="#9ca3af", hover_color="#18181b", command=self.show_edit_mode)
@@ -104,7 +167,7 @@ class AccountRow(ctk.CTkFrame):
             height=30, 
             fg_color="transparent", 
             text_color="#555555",
-            font=("Arial", 16, "bold"),
+            font=("PLAY", 16, "bold"),
             hover_color="#ef4444", 
             command=self.show_confirm_delete
         )
@@ -214,6 +277,24 @@ def resource_path(relative_path):
 
     return os.path.join(base_path, relative_path)
 
+
+def load_font_windows(font_path):
+    """Программная регистрация шрифта в системе на время работы сессии."""
+    if not os.path.exists(font_path):
+        return False
+    # FR_PRIVATE = 0x10 (шрифт виден только текущему процессу)
+    # FR_NOT_ENUM = 0x20 (шрифт не отображается в списке других программ)
+    path_buf = ctypes.create_unicode_buffer(font_path)
+    if ctypes.windll.gdi32.AddFontResourceExW(path_buf, 0x10, None):
+        return True
+    return False
+
+
+# Загрузка шрифта PLAY до создания окна (путь учитывает PyInstaller)
+_play_font_path = resource_path(os.path.join("assets", "fonts", "Play-Regular.ttf"))
+if not load_font_windows(_play_font_path):
+    logging.warning("Play font not loaded from %s, UI may use fallback font.", _play_font_path)
+
 class SkyLinkGUI(ctk.CTk):
     def __init__(self, config):
         super().__init__()
@@ -259,6 +340,10 @@ class SkyLinkGUI(ctk.CTk):
         self.update_ui_loop()
         self.refresh_account_list()
 
+        # 5. Start minimized: скрыть окно до первого кадра, чтобы не мелькало
+        if self._load_start_minimized_setting():
+            self.withdraw()
+
     def on_window_map(self, event):
         """Событие срабатывает, когда окно реально отрисовано ОС."""
         # Проверяем, что событие пришло от самого окна, а не от виджета внутри
@@ -282,8 +367,8 @@ class SkyLinkGUI(ctk.CTk):
         self.header.bind("<Button-1>", self.start_move)
         self.header.bind("<B1-Motion>", self.do_move)
         
-        ctk.CTkLabel(self.header, text="⚡", text_color=COLOR_ACCENT, font=("Arial", 16)).pack(side="left", padx=(15, 5))
-        ctk.CTkLabel(self.header, text="SKYLINK AGENT", font=("Arial", 12, "bold"), text_color="white").pack(side="left")
+        ctk.CTkLabel(self.header, text="⚡", text_color=COLOR_ACCENT, font=("PLAY", 16)).pack(side="left", padx=(15, 5))
+        ctk.CTkLabel(self.header, text="SKYLINK AGENT", font=("PLAY", 12, "bold"), text_color="white").pack(side="left")
         
         ctk.CTkButton(self.header, text="✕", width=30, height=30, fg_color="transparent", hover_color=COLOR_RED, command=self.minimize_to_tray).pack(side="right", padx=5)
         
@@ -308,7 +393,7 @@ class SkyLinkGUI(ctk.CTk):
         self.btn_add = ctk.CTkButton(
             self.footer, 
             text="+ ADD ACCOUNT",          # КАПСОМ стильнее
-            font=("Arial", 11, "bold"),
+            font=("PLAY", 11, "bold"),
             fg_color="transparent",        # Прозрачная
             border_width=1, 
             border_color="#3f3f46", 
@@ -319,9 +404,67 @@ class SkyLinkGUI(ctk.CTk):
             command=self.add_manual_account
         )
         self.btn_add.pack(side="left")
+
+        self._start_minimized_var = BooleanVar(value=self._load_start_minimized_setting())
+        self.chk_start_minimized = ctk.CTkCheckBox(
+            self.footer,
+            text="Start minimized",
+            variable=self._start_minimized_var,
+            font=("PLAY", 11),
+            text_color=COLOR_TEXT_GRAY,
+            fg_color="#3f3f46",
+            hover_color="#52525b",
+            command=self._on_start_minimized_changed,
+        )
+        self.chk_start_minimized.pack(side="left", padx=(15, 0))
+
+        self._run_at_startup_var = BooleanVar(value=is_app_in_startup())
+        self.chk_run_at_startup = ctk.CTkCheckBox(
+            self.footer,
+            text="RUN AT STARTUP",
+            variable=self._run_at_startup_var,
+            font=("PLAY", 11),
+            text_color=COLOR_TEXT_GRAY,
+            fg_color="#3f3f46",
+            hover_color="#52525b",
+            command=self._on_run_at_startup_changed,
+        )
+        self.chk_run_at_startup.pack(side="left", padx=(15, 0))
         
-        self.lbl_footer_status = ctk.CTkLabel(self.footer, text="Initializing...", text_color=COLOR_TEXT_GRAY, font=("Arial", 11))
+        self.lbl_footer_status = ctk.CTkLabel(self.footer, text="Initializing...", text_color=COLOR_TEXT_GRAY, font=("PLAY", 11))
         self.lbl_footer_status.pack(side="right")
+
+    def _settings_path(self):
+        return self.config.app_data_dir / "settings.json"
+
+    def _load_start_minimized_setting(self):
+        try:
+            p = self._settings_path()
+            if p.exists():
+                with open(p, "r", encoding="utf-8") as f:
+                    return json.load(f).get("start_minimized", False)
+        except Exception:
+            pass
+        return False
+
+    def _save_start_minimized_setting(self, value):
+        try:
+            with open(self._settings_path(), "w", encoding="utf-8") as f:
+                json.dump({"start_minimized": bool(value)}, f, indent=2)
+        except Exception as e:
+            logging.warning("Could not save start_minimized setting: %s", e)
+
+    def _on_start_minimized_changed(self):
+        self._save_start_minimized_setting(self._start_minimized_var.get())
+
+    def _on_run_at_startup_changed(self):
+        want = self._run_at_startup_var.get()
+        if want:
+            if not add_app_to_startup():
+                self._run_at_startup_var.set(False)
+        else:
+            if not remove_app_from_startup():
+                self._run_at_startup_var.set(True)
 
     def create_body(self):
         self.body_frame = ctk.CTkFrame(self.inner_frame, fg_color="transparent")
@@ -331,15 +474,32 @@ class SkyLinkGUI(ctk.CTk):
         self.active_frame = ctk.CTkFrame(self.body_frame, fg_color="transparent")
         self.active_frame.pack(fill="x", padx=10, pady=(10, 5))
         
-        ctk.CTkLabel(self.active_frame, text="ACTIVE COMMANDER:", text_color=COLOR_TEXT_GRAY, font=("Arial", 10, "bold")).pack(anchor="w")
+        ctk.CTkLabel(self.active_frame, text="ACTIVE COMMANDER:", text_color=COLOR_TEXT_GRAY, font=("PLAY", 10, "bold")).pack(anchor="w")
         
         pilot_row = ctk.CTkFrame(self.active_frame, fg_color="transparent")
         pilot_row.pack(fill="x", pady=(0, 5))
-        
-        self.lbl_commander = ctk.CTkLabel(pilot_row, text="WAITING...", font=("Arial", 20, "bold"), text_color=COLOR_TEXT_WHITE)
-        self.lbl_commander.pack(side="left")
-        self.lbl_active_status = ctk.CTkLabel(pilot_row, text="", font=("Arial", 12, "bold"), text_color=COLOR_GREEN)
-        self.lbl_active_status.pack(side="right", padx=(0, 30))
+        pilot_row.grid_columnconfigure(1, weight=1)
+
+        # Имя пилота слева
+        self.lbl_commander = ctk.CTkLabel(pilot_row, text="WAITING...", font=("PLAY", 20, "bold"), text_color=COLOR_TEXT_WHITE)
+        self.lbl_commander.grid(row=0, column=0, sticky="w")
+
+        # Внутреннее окно для полного статуса: ширина под 33 символа, прозрачное; при длинном тексте — бегущая строка
+        main_width = 640
+        status_win_width = int(main_width * 0.4 * 33 / 22)   # под 33 символа (~384)
+        status_win_height = 28
+        self._marquee_visible_chars = 33
+        self._marquee_offset = 0
+        self._marquee_tick = 0
+        self._marquee_full_text = ""
+        self.status_win = ctk.CTkFrame(pilot_row, width=status_win_width, height=status_win_height, fg_color="transparent")
+        self.status_win.grid(row=0, column=2, padx=(0, 30), sticky="e")
+        self.status_win.grid_propagate(False)
+        self.lbl_full_status = ctk.CTkLabel(
+            self.status_win, text="Initializing...", text_color=COLOR_TEXT_GRAY,
+            font=("PLAY", 20, "bold"), anchor="e"
+        )
+        self.lbl_full_status.place(relx=1, rely=0.5, anchor="e", x=-8)
 
         # 2. Section Header with Line (Решение твоей проблемы)
         # Создаем контейнер для заголовка
@@ -347,7 +507,7 @@ class SkyLinkGUI(ctk.CTk):
         header_row.pack(fill="x", padx=10, pady=(15, 5)) # pady=15 дает отступ сверху, отделяя от Active Commander
         
         # Текст
-        lbl = ctk.CTkLabel(header_row, text="REGISTERED ACCOUNTS", text_color=COLOR_TEXT_GRAY, font=("Arial", 10, "bold"))
+        lbl = ctk.CTkLabel(header_row, text="REGISTERED ACCOUNTS", text_color=COLOR_TEXT_GRAY, font=("PLAY", 10, "bold"))
         lbl.pack(side="left")
         
         # Линия справа от текста
@@ -434,28 +594,45 @@ class SkyLinkGUI(ctk.CTk):
             st_lower = status_text.lower()
             current_cmdr = CURRENT_SESSION.get("commander")
 
-            # 2. Обновляем блок активного пилота
+            # 2. Обновляем блок активного пилота: полный статус в окне (бегущая строка, если не помещается)
+            if status_text != self._marquee_full_text:
+                self._marquee_full_text = status_text
+                self._marquee_offset = 0
+                self._marquee_tick = 0
+            n = self._marquee_visible_chars
+            if len(status_text) > n:
+                loop_text = (status_text + "   ") * 2
+                start = self._marquee_offset % len(loop_text)
+                display = (loop_text[start:] + loop_text[:start])[:n]
+                self._marquee_tick += 1
+                if self._marquee_tick % 3 == 0:
+                    self._marquee_offset += 1
+                self.lbl_full_status.configure(text=display)
+            else:
+                self.lbl_full_status.configure(text=status_text)
             if current_cmdr:
                 self.lbl_commander.configure(text=current_cmdr)
-                
-                # Мягкая проверка статуса
-                if "waiting" in st_lower or "standby" in st_lower or "closed" in st_lower:
-                    self.lbl_active_status.configure(text="STANDBY ●", text_color="#FFC107")
-                elif "error" in st_lower or "failed" in st_lower or "invalid" in st_lower or "network" in st_lower:
-                    self.lbl_active_status.configure(text="ERROR ●", text_color=COLOR_RED)
-                else:
-                    self.lbl_active_status.configure(text="CONNECTED ●", text_color=COLOR_GREEN)
             else:
                 self.lbl_commander.configure(text="WAITING FOR SIGNAL...")
-                self.lbl_active_status.configure(text="", text_color="gray")
 
-            # 3. Обновляем статусы авторизации в списке
+            # 3. Краткий статус внизу (в футере)
+            if current_cmdr:
+                if "waiting" in st_lower or "standby" in st_lower or "closed" in st_lower:
+                    self.lbl_footer_status.configure(text="STANDBY ●", text_color="#FFC107")
+                elif "error" in st_lower or "failed" in st_lower or "invalid" in st_lower or "network" in st_lower:
+                    self.lbl_footer_status.configure(text="ERROR ●", text_color=COLOR_RED)
+                else:
+                    self.lbl_footer_status.configure(text="CONNECTED ●", text_color=COLOR_GREEN)
+            else:
+                self.lbl_footer_status.configure(text="", text_color=COLOR_TEXT_GRAY)
+
+            # 4. Обновляем статусы авторизации в списке
             # (Тут свой try/except не нужен, общий поймает)
             for widget in self.scroll_frame.winfo_children():
                 if isinstance(widget, AccountRow):
                     widget.update_auth_status()
             
-            # 4. Логика цвета Трея
+            # 5. Логика цвета Трея
             target_color = "gray"
             if "waiting" in st_lower or "standby" in st_lower or "closed" in st_lower:
                 target_color = "yellow"
@@ -464,13 +641,11 @@ class SkyLinkGUI(ctk.CTk):
             elif "error" in st_lower or "failed" in st_lower or "invalid" in st_lower:
                 target_color = "red"
                 
-            self.lbl_footer_status.configure(text=f"STATUS: {status_text}")
-            
             if self.tray_icon and target_color != self.last_tray_color:
                 self.tray_icon.icon = self.create_tray_image(target_color)
                 self.last_tray_color = target_color
 
-            # 5. Пульсация (Вот здесь раньше падало)
+            # 6. Пульсация (Вот здесь раньше падало)
             self.pulse_phase += 0.15
             t = (math.sin(self.pulse_phase) + 1) / 2
             new_text_color = lerp_color((255, 200, 200), (255, 100, 100), t)
