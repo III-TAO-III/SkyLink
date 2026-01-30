@@ -1,9 +1,9 @@
 ; --- НАСТРОЙКИ ПРОЕКТА ---
 #define MyAppName "SkyLink Agent"
-#define MyAppVersion "0.81"
+#define MyAppVersion "0.83"
 #define MyAppPublisher "TAO"
 #define MyAppURL "https://github.com/III-TAO-III/SkyLink"
-#define MyAppExeName "SkyLinkV0.81.exe"
+#define MyAppExeName "SkyLinkV0.83.exe"
 
 [Setup]
 ; Уникальный ID приложения (сгенерирован случайно, можно оставить этот)
@@ -17,7 +17,7 @@ AppUpdatesURL={#MyAppURL}
 
 ; Куда сохранять готовый setup.exe (в корень проекта)
 OutputDir=.
-OutputBaseFilename=SkyLink_Setup_v0.81
+OutputBaseFilename=SkyLink_Setup_v0.83
 ; Иконка самого инсталлятора
 SetupIconFile=icon.ico
 
@@ -56,6 +56,17 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 [Registry]
 ; Логика автозагрузки: пишем в реестр Windows (HKCU Run), если пользователь поставил галочку
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "SkyLinkAgent"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue; Tasks: startup
+
+[Code]
+; При установке/переустановке пишем маркер в AppData\SkyLink; приложение при первом запуске обнулит кэш дедупликации
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    ForceDirectories(ExpandConstant('{userappdata}\SkyLink'));
+    SaveStringToFile(ExpandConstant('{userappdata}\SkyLink\.clear_dedup_cache'), '', False);
+  end;
+end;
 
 [Run]
 ; Предложить запустить программу после установки

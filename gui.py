@@ -589,6 +589,10 @@ class SkyLinkGUI(ctk.CTk):
             return
         
         try:
+            # 0. Автооткрытие окна из трея при 401/403 (как по клику по иконке в трее)
+            if UI_STATE.pop("request_show_window", False):
+                self.show_window()
+
             # 1. Получаем текущее состояние
             status_text = UI_STATE.get("status", "Idle")
             st_lower = status_text.lower()

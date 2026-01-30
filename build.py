@@ -6,7 +6,7 @@ ctk_path = os.path.dirname(customtkinter.__file__)
 
 args = [
     'gui.py',                        # Входной файл
-    '--name=SkyLinkV0.81',                # Имя EXE
+    '--name=SkyLinkV0.83',                # Имя EXE
     '--onedir',                     # Один файл
     '--noconsole',                   # Без черного окна
     '--clean',                       # Очистка кэша

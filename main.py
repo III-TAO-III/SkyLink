@@ -17,7 +17,12 @@ watcher = None
 def update_ui_state(status, message):
     """Callback to update the global UI state from background threads."""
     UI_STATE["status"] = message or status
-    
+
+    # При 401/403 запрашиваем автооткрытие окна из трея (GUI обработает в update_ui_loop)
+    msg = (message or "").lower()
+    if status and status.lower() == "error" and "auth error" in msg and ("401" in (message or "") or "403" in (message or "")):
+        UI_STATE["request_show_window"] = True
+
     st_lower = status.lower()
     if "running" in st_lower or "sent" in st_lower or "monitoring" in st_lower:
         UI_STATE["color"] = "green"

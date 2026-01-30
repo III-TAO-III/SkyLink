@@ -12,6 +12,10 @@ from config import CURRENT_SESSION
 # Глобальный регистр ошибок авторизации (хранится в оперативной памяти)
 FAILED_ACCOUNTS = set()
 
+# Офлайн-очередь: таймаут жизни пакета и пауза между переотправками
+OFFLINE_QUEUE_TIMEOUT_SEC = 120   # 2 минуты — затем пакет удаляется
+OFFLINE_RETRY_PAUSE_SEC = 10      # пауза между попытками отправки
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -29,6 +33,16 @@ class Sender(threading.Thread):
 
     def load_hashes(self):
         """Loads hashes from the cache file or creates it if it doesn't exist."""
+        # При установке/переустановке установщик оставляет маркер — обнуляем кэш для полной переотправки пакетов
+        marker = self.cache_path.parent / ".clear_dedup_cache"
+        if marker.exists():
+            try:
+                if self.cache_path.exists():
+                    self.cache_path.unlink()
+                marker.unlink()
+                logging.info("Deduplication cache cleared after install/reinstall.")
+            except OSError as e:
+                logging.warning("Could not clear dedup cache marker: %s", e)
         if self.cache_path.exists():
             try:
                 with open(self.cache_path, 'r') as f:
@@ -158,8 +172,10 @@ class Sender(threading.Thread):
             self.hashes[cache_key] = event_hash
             self.save_hashes()
 
-        # 4. Send the filtered event
-        self._send_to_api(filtered_event)
+        # 4. Send the filtered event; при ошибке сети/сервера кладём в офлайн-очередь с меткой времени
+        success, queue_on_failure = self._send_to_api(filtered_event)
+        if not success and queue_on_failure:
+            self.offline_queue.put((filtered_event, time.time()))
 
     def _log_event_details(self, event):
         """Logs detailed information for specific events."""
@@ -178,7 +194,7 @@ class Sender(threading.Thread):
             logging.info(f"Successfully sent event: {event_type}")
 
     def _send_to_api(self, event):
-        """Sends a single event to the API with dynamic, session-based headers."""
+        """Sends a single event to the API. Returns (success, queue_on_failure)."""
         # Берем имя текущего пилота ИЗ СЕССИИ. Это самый надежный источник.
         cmdr_name = CURRENT_SESSION.get("commander", "Unknown")
         api_key = CURRENT_SESSION.get("api_key")
@@ -209,14 +225,14 @@ class Sender(threading.Thread):
                 CURRENT_SESSION["api_key"] = api_key
                 logging.info(f"🔑 Key loaded from disk for: {cmdr_name}")
 
-        # 3. Если и теперь нет — сдаемся
+        # 3. Если и теперь нет — сдаемся (не ставим в очередь)
         if not api_key:
             logging.warning(f"Cannot send event: No active API Key for commander {cmdr_name}")
-            return
+            return (False, False)
 
         if not self.config.API_URL:
             logging.error("API URL is not configured. Cannot send event.")
-            return
+            return (False, False)
 
         headers = {
             'Content-Type': 'application/json',
@@ -244,37 +260,46 @@ class Sender(threading.Thread):
 
                 # Раз успех — убираем из черного списка
                 FAILED_ACCOUNTS.discard(cmdr_name)
+                return (True, False)
 
-            # --- 2. ОШИБКА АВТОРИЗАЦИИ (Красный) ---
-            # (Твой код без изменений)
+            # --- 2. ОШИБКА АВТОРИЗАЦИИ (Красный) — в очередь не ставим
             elif response.status_code in [401, 403]:
                 logging.error(f"⛔ Auth failed for {cmdr_name} (Status: {response.status_code})")
                 FAILED_ACCOUNTS.add(cmdr_name)
                 self.update_status('Error', f'Auth Error {response.status_code} for {cmdr_name}')
+                return (False, False)
 
-            # --- 3. ОШИБКА СЕРВЕРА (Красный) ---
-            # (Твой код без изменений)
+            # --- 3. ОШИБКА СЕРВЕРА — ставим в офлайн-очередь (вызывающий код добавит с timestamp)
             else:
                 logging.error(f"Failed to send event: {response.status_code} - {response.text}")
-                self.offline_queue.put(event)
                 self.update_status('Error', 'Failed to send event, queuing.')
+                return (False, True)
 
-        # --- 4. ОШИБКА СЕТИ (Красный) ---
-        # (Твой код без изменений)
+        # --- 4. ОШИБКА СЕТИ — ставим в офлайн-очередь (вызывающий код добавит с timestamp)
         except requests.RequestException as e:
             logging.error(f"Network error while sending event: {e}")
-            self.offline_queue.put(event)
             self.update_status('Error', 'Network error, queuing event.')
+            return (False, True)
 
     def retry_offline_queue(self):
-        """Tries to send events from the offline queue."""
-        if not self.offline_queue.empty():
-            logging.info(f"Retrying {self.offline_queue.qsize()} events from the offline queue.")
-            while not self.offline_queue.empty():
-                event = self.offline_queue.get()
-                self._send_to_api(event)
-                if self.offline_queue.qsize() > 0:
-                    time.sleep(2)  # Wait a bit before retrying the next one
-                else:
-                    self.update_status('Running', 'Offline queue cleared.')
+        """Tries to send events from the offline queue. Пакеты старше 2 минут удаляются."""
+        if self.offline_queue.empty():
+            return
+        logging.info(f"Retrying {self.offline_queue.qsize()} events from the offline queue.")
+        while not self.offline_queue.empty():
+            item = self.offline_queue.get()
+            if isinstance(item, tuple):
+                event, first_queued = item
+            else:
+                event, first_queued = item, time.time()
+            if time.time() - first_queued > OFFLINE_QUEUE_TIMEOUT_SEC:
+                logging.warning(f"Dropping event {event.get('event', '?')} after {OFFLINE_QUEUE_TIMEOUT_SEC}s timeout.")
+                continue
+            success, queue_on_failure = self._send_to_api(event)
+            if not success and queue_on_failure:
+                self.offline_queue.put((event, first_queued))
+            if self.offline_queue.qsize() > 0:
+                time.sleep(OFFLINE_RETRY_PAUSE_SEC)
+            else:
+                self.update_status('Running', 'Offline queue cleared.')
 
