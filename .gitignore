@@ -26,3 +26,6 @@ deduplication_cache.json
 Thumbs.db
 .vscode/
 .idea/
+
+# --- Local / personal ---
+start.md
