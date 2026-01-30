@@ -45,7 +45,7 @@ Name: "startup"; Description: "Запускать SkyLink Agent автомати
 
 [Files]
 ; Откуда берем файлы. Внимание: предполагается, что exe лежит в папке dist
-Source: "dist\SkyLinkV0.81\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\SkyLinkV0.83\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Если иконка нужна отдельно (обычно она уже внутри exe, но на всякий случай)
 Source: "icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 

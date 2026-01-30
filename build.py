@@ -11,9 +11,10 @@ args = [
     '--noconsole',                   # Без черного окна
     '--clean',                       # Очистка кэша
     f'--add-data={ctk_path};customtkinter', # Темы CTk
-    '--add-data=events.json;.',      # <--- ВАЖНО: Зашиваем правила внутрь
-    '--add-data=icon.ico;.',  # <--- Зашиваем файл иконки внутрь exe как ресурс
-    '--icon=icon.ico',               # Иконка
+    '--add-data=events.json;.',      # Правила событий (config.get_resource_path)
+    '--add-data=icon.ico;.',         # Иконка окна и трея (gui.resource_path)
+    '--add-data=assets/fonts/Play-Regular.ttf;assets/fonts',  # Шрифт PLAY (gui)
+    '--icon=icon.ico',               # Иконка EXE
 ]
 
 print("🚀 Starting Build...")

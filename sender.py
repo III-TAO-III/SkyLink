@@ -196,15 +196,16 @@ class Sender(threading.Thread):
     def _send_to_api(self, event):
         """Sends a single event to the API. Returns (success, queue_on_failure)."""
         # Берем имя текущего пилота ИЗ СЕССИИ. Это самый надежный источник.
-        cmdr_name = CURRENT_SESSION.get("commander", "Unknown")
+        cmdr_name = CURRENT_SESSION.get("commander") or "Unknown"
         api_key = CURRENT_SESSION.get("api_key")
 
         # Функция для поиска ключа без учета регистра (Dr.Tellur == DR.TELLUR)
         def find_key_insensitive(target_name, accounts_dict):
+            if target_name is None:
+                return None
             # 1. Быстрый поиск (точное совпадение)
             if target_name in accounts_dict:
                 return accounts_dict[target_name]
-            
             # 2. Медленный поиск (сравниваем lowercase)
             target_lower = target_name.lower()
             for name, key in accounts_dict.items():
@@ -256,7 +257,8 @@ class Sender(threading.Thread):
                     self.update_status('Waiting', 'Game closed. Waiting for Commander...')
                 else:
                     # Любое другое событие — ставим Зеленый (Running)
-                    self.update_status('Running', 'Event sent successfully.')
+                    event_type = event.get('event', 'Event')
+                    self.update_status('Running', f'Event {event_type} sent')
 
                 # Раз успех — убираем из черного списка
                 FAILED_ACCOUNTS.discard(cmdr_name)

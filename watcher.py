@@ -87,13 +87,32 @@ class JournalWatcher:
             CURRENT_SESSION["api_key"] = None
             logging.warning(f"🚨 No API Key found for Commander: {commander_name}. Events will not be sent.")
 
+    def _sync_session_from_file(self):
+        """Читает журнал с начала и восстанавливает сессию по последнему LoadGame/Commander."""
+        if not self.latest_log_file or not self.latest_log_file.exists():
+            return
+        try:
+            with open(self.latest_log_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    event_data = parse_json_line(line)
+                    if not event_data or 'event' not in event_data:
+                        continue
+                    if event_data['event'] in ["Commander", "LoadGame"]:
+                        commander_name = event_data.get("Name") or event_data.get("Commander")
+                        if commander_name:
+                            self.update_session(commander_name)
+        except (IOError, OSError) as e:
+            logging.warning("Could not sync session from journal: %s", e)
+
     def start(self):
         """Starts the journal watcher."""
         self.latest_log_file = self.find_latest_log_file()
         if self.latest_log_file:
-            # Go to the end of the file on start to only process new events
+            # Восстановить сессию по уже записанным LoadGame/Commander (игра могла быть запущена до нас)
+            self._sync_session_from_file()
+            # Дальше обрабатываем только новые строки
             self.last_file_position = self.latest_log_file.stat().st_size
-        
+
         event_handler = JournalFileHandler(self)
         self.observer.schedule(event_handler, str(self.journal_dir), recursive=False)
         self.observer.start()
