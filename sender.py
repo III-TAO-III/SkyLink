@@ -82,6 +82,34 @@ class Sender(threading.Thread):
         logging.info(f"Status: {status} - {message}")
 
     @staticmethod
+    def _find_key_insensitive(target_name, accounts_dict):
+        """Finds API key by commander name (case-insensitive). Returns key or None."""
+        if target_name is None:
+            return None
+        if target_name in accounts_dict:
+            return accounts_dict[target_name]
+        target_lower = target_name.lower()
+        for name, key in accounts_dict.items():
+            if name.lower() == target_lower:
+                return key
+        return None
+
+    def _resolve_api_key(self, commander_name):
+        """Resolves API key for the given commander (session, then accounts, then disk). Returns key or None."""
+        api_key = CURRENT_SESSION.get("api_key")
+        if api_key:
+            return api_key
+        api_key = self._find_key_insensitive(commander_name, self.config.accounts)
+        if api_key:
+            return api_key
+        self.config.load_accounts()
+        api_key = self._find_key_insensitive(commander_name, self.config.accounts)
+        if api_key:
+            CURRENT_SESSION["api_key"] = api_key
+            logging.info(f"🔑 Key loaded from disk for: {commander_name}")
+        return api_key
+
+    @staticmethod
     def purge_commander_cache(commander_name, cache_path):
         """Removes all cache entries for a given commander."""
         if not cache_path.exists():
@@ -150,30 +178,36 @@ class Sender(threading.Thread):
         field_rules = self.config.field_rules.get("filters", {}).get(event_type, {})
         filtered_event = filter_event_fields(event, field_rules)
         
-        # 3. Handle deduplication based on event rules
+        commander_name = CURRENT_SESSION.get("commander", "Unknown")
+        api_key = self._resolve_api_key(commander_name)
+        
+        # 3. Handle deduplication based on event rules (hash only when commander has API key)
         rule = self.config.event_rules.get(event_type)
+        cache_key = None
         if rule and rule.get('deduplicate'):
-            commander_name = CURRENT_SESSION.get("commander", "Unknown")
-            
-            # Create a composite key for the cache
             cache_key = f"{commander_name}|{event_type}"
-            
-            # Create a copy for hashing, excluding volatile fields
-            content_to_hash = filtered_event.copy()
-            content_to_hash.pop("timestamp", None)
-            content_to_hash.pop("event", None)
-
-            content_str = f"{commander_name}|{json.dumps(content_to_hash, sort_keys=True)}"
-            event_hash = hashlib.sha256(content_str.encode('utf-8')).hexdigest()
-
-            if self.hashes.get(cache_key) == event_hash:
-                logging.info(f"Skipping duplicate event for {commander_name}: {event_type}")
-                return
-            self.hashes[cache_key] = event_hash
-            self.save_hashes()
+            if api_key:
+                # Create a copy for hashing, excluding volatile fields
+                content_to_hash = filtered_event.copy()
+                content_to_hash.pop("timestamp", None)
+                content_to_hash.pop("event", None)
+                content_str = f"{commander_name}|{json.dumps(content_to_hash, sort_keys=True)}"
+                event_hash = hashlib.sha256(content_str.encode('utf-8')).hexdigest()
+                if self.hashes.get(cache_key) == event_hash:
+                    logging.info(f"Skipping duplicate event for {commander_name}: {event_type}")
+                    return
+                self.hashes[cache_key] = event_hash
+                # save_hashes() after send — on success persist, on failure remove hash
 
         # 4. Send the filtered event; при ошибке сети/сервера кладём в офлайн-очередь с меткой времени
         success, queue_on_failure = self._send_to_api(filtered_event)
+        
+        if not success and cache_key is not None and cache_key in self.hashes:
+            self.hashes.pop(cache_key)
+            self.save_hashes()
+        elif success and cache_key is not None and cache_key in self.hashes:
+            self.save_hashes()
+        
         if not success and queue_on_failure:
             self.offline_queue.put((filtered_event, time.time()))
 
@@ -195,33 +229,14 @@ class Sender(threading.Thread):
 
     def _send_to_api(self, event):
         """Sends a single event to the API. Returns (success, queue_on_failure)."""
-        # Берем имя текущего пилота ИЗ СЕССИИ. Это самый надежный источник.
         cmdr_name = CURRENT_SESSION.get("commander") or "Unknown"
         api_key = CURRENT_SESSION.get("api_key")
 
-        # Функция для поиска ключа без учета регистра (Dr.Tellur == DR.TELLUR)
-        def find_key_insensitive(target_name, accounts_dict):
-            if target_name is None:
-                return None
-            # 1. Быстрый поиск (точное совпадение)
-            if target_name in accounts_dict:
-                return accounts_dict[target_name]
-            # 2. Медленный поиск (сравниваем lowercase)
-            target_lower = target_name.lower()
-            for name, key in accounts_dict.items():
-                if name.lower() == target_lower:
-                    return key
-            return None
-
-        # 1. Если ключа нет в сессии, ищем в памяти
         if not api_key:
-            api_key = find_key_insensitive(cmdr_name, self.config.accounts)
-
-        # 2. Если все равно нет — читаем диск и ищем снова
+            api_key = self._find_key_insensitive(cmdr_name, self.config.accounts)
         if not api_key:
-            self.config.load_accounts() # Перечитываем файл
-            api_key = find_key_insensitive(cmdr_name, self.config.accounts)
-
+            self.config.load_accounts()
+            api_key = self._find_key_insensitive(cmdr_name, self.config.accounts)
             if api_key:
                 CURRENT_SESSION["api_key"] = api_key
                 logging.info(f"🔑 Key loaded from disk for: {cmdr_name}")
