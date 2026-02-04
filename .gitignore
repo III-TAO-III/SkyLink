@@ -10,6 +10,14 @@ build/
 dist/
 *.spec
 
+# --- Сборка и упаковка (не работа приложения) ---
+# Скрипты и артефакты создания exe/инсталлятора — в репо не нужны
+build.py
+setup.iss
+RELEASE_GUIDE.md
+SkyLink_Setup_*.exe
+*.iss
+
 # --- User Data & Security (КРИТИЧНО!) ---
 # Эти файлы содержат твои ключи и историю. Их нельзя светить.
 accounts.json
@@ -29,3 +37,6 @@ Thumbs.db
 
 # --- Local / personal ---
 start.md
+
+# --- Documentation (local, not for GitHub) ---
+docs/
