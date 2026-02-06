@@ -12,9 +12,11 @@ load_dotenv()
 # --- Constants ---
 # Жестко прописанный адрес для тех, у кого нет .env (твоего друга)
 DEFAULT_API_URL = "https://skybioml.net/api/telemetry/skylink"
+DEFAULT_HEARTBEAT_URL = "https://skybioml.net/api/system/skylinkbeat"
 
 # Если в системе нет переменной (как в EXE), берем адрес выше
 API_URL = os.getenv("SKYLINK_API_URL", DEFAULT_API_URL)
+HEARTBEAT_URL = os.getenv("SKYLINK_HEARTBEAT_URL", DEFAULT_HEARTBEAT_URL)
 
 USER_AGENT = "SkyLink-Client/1.0"
 
@@ -91,6 +93,7 @@ class Config:
 
         # --- Expose env vars through the instance ---
         self.API_URL = API_URL
+        self.HEARTBEAT_URL = HEARTBEAT_URL
         self.USER_AGENT = USER_AGENT
         
         # --- Journal Path Discovery ---

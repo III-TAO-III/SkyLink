@@ -15,7 +15,6 @@ dist/
 build.py
 setup.iss
 RELEASE_GUIDE.md
-SkyLink_Setup_*.exe
 *.iss
 
 # --- User Data & Security (КРИТИЧНО!) ---

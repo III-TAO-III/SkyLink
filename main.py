@@ -1,8 +1,9 @@
 import logging
 import time
 from config import Config, UI_STATE
-from sender import Sender
+from sender import Sender, FAILED_ACCOUNTS
 from watcher import JournalWatcher
+from heartbeat import HeartbeatService
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -10,9 +11,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # --- Global Instances ---
 # Убираем жесткое создание Config() здесь. 
 # Пусть config будет None, пока мы его не инициализируем.
-config = None 
+config = None
 sender = None
 watcher = None
+heartbeat = None
 
 def update_ui_state(status, message):
     """Callback to update the global UI state from background threads."""
@@ -34,7 +36,7 @@ def update_ui_state(status, message):
 # --- ИЗМЕНЕНИЕ: Добавляем аргумент shared_config ---
 def start_background_service(shared_config=None):
     """Initializes and starts the background services."""
-    global sender, watcher, config
+    global sender, watcher, config, heartbeat
 
     logging.info("🚀 Starting SkyLink background service...")
 
@@ -59,6 +61,10 @@ def start_background_service(shared_config=None):
     else:
         logging.error("Could not find the Elite Dangerous journal directory. Watcher not started.")
 
+    heartbeat = HeartbeatService(config, FAILED_ACCOUNTS)
+    heartbeat.start()
+    logging.info("💓 Heartbeat service started.")
+
     try:
         while True:
             time.sleep(1)
@@ -67,18 +73,20 @@ def start_background_service(shared_config=None):
 
 def stop_background_service():
     """Stops the background services gracefully."""
-    global watcher, sender 
+    global watcher, sender, heartbeat
 
     logging.info("🛑 Stopping SkyLink background service...")
-    
+
+    if heartbeat:
+        heartbeat.stop()
+        heartbeat.join(timeout=1.0)
     if watcher:
         watcher.stop()
     if sender:
         sender.stop()
-        
     if sender:
-        sender.join(timeout=1.0) 
-        
+        sender.join(timeout=1.0)
+
     logging.info("✅ Background services stopped (or forced).")
 
 if __name__ == '__main__':
