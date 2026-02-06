@@ -251,7 +251,8 @@ class AccountRow(ctk.CTkFrame):
             # Мы не сравниваем имена. Мы просто берем то имя, которое вернул сервер (result_name),
             # и сохраняем аккаунт под этим именем.
             self.app.config.save_account(result_name, new_key)
-            self.app.refresh_account_list() # Обновляем список, чтобы увидеть нового пилота
+            FAILED_ACCOUNTS.discard(result_name)  # сразу сбрасываем INVALID, чтобы показать LINKED
+            self.app.refresh_account_list()  # Обновляем список, чтобы увидеть нового пилота
         else:
             # 3. ОШИБКА
             self.entry_key.delete(0, "end")
