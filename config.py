@@ -64,7 +64,7 @@ UI_STATE = {
 }
 
 # EDDN: event types that must be sent to EDDN even if events.json marks them "ignore" for portal
-EDDN_REQUIRED_EVENTS = frozenset({"Scan", "FSDJump", "SAASignalsFound", "Location"})
+EDDN_REQUIRED_EVENTS = frozenset({"Scan", "FSDJump", "SAASignalsFound", "FSSBodySignals"})
 
 
 def get_resource_path(relative_path):

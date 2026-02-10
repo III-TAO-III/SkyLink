@@ -16,6 +16,7 @@ except ImportError:
     aiohttp = None
 
 EDDN_SCHEMA_REF = "https://eddn.edcd.io/schemas/journal/1"
+EDDN_SCHEMA_FSSBODYSIGNALS = "https://eddn.edcd.io/schemas/fssbodysignals/1"
 EDDN_UPLOAD_URL = "https://eddn.edcd.io:4430/upload/"
 EDDN_TIMEOUT_SEC = 8
 SOFTWARE_NAME = "skybioml.net"
@@ -37,17 +38,15 @@ ALLOWED_FIELDS = {
         "RotationPeriod", "AxialTilt", "Rings", "WasDiscovered", "WasMapped", "WasFootfalled",
         "PlanetClass", "Atmosphere", "AtmosphereType", "AtmosphereComposition", "Volcanism",
         "MassEM", "SurfaceGravity", "SurfacePressure", "Landable", "Composition", "TerraformState", "TidalLock",
-        "horizons", "odyssey", "StarPos"
+        "Materials", "ReserveLevel", "horizons", "odyssey", "StarPos"
     },
     "SAASignalsFound": {
         "timestamp", "event", "BodyName", "SystemAddress", "BodyID", "Signals", "Genuses",
         "StarSystem", "StarPos", "horizons", "odyssey"
     },
-    "Location": {
-        "timestamp", "event", "StarSystem", "SystemAddress", "StarPos", "SystemAllegiance",
-        "SystemEconomy", "SystemSecondEconomy", "SystemGovernment", "SystemSecurity",
-        "Population", "Body", "BodyID", "BodyType", "Factions", "SystemFaction", "SystemState",
-        "horizons", "odyssey", "Taxi", "Multicrew"
+    "FSSBodySignals": {
+        "timestamp", "event", "BodyID", "BodyName", "Signals", "StarSystem", "SystemAddress",
+        "StarPos", "horizons", "odyssey"
     },
 }
 
@@ -95,12 +94,12 @@ def build_eddn_payload(event_data: dict, game_state: Optional[dict] = None) -> O
     # --- ИНЪЕКЦИЯ TECHNICAL TRUTH (DLC / Taxi / Multicrew из сессии) ---
     msg["horizons"] = game_state.get("is_horizons", False)
     msg["odyssey"] = game_state.get("is_odyssey", False)
-    msg["Taxi"] = game_state.get("is_taxi", False)
-    msg["Multicrew"] = game_state.get("is_multicrew", False)
+    if msg.get("event") == "FSDJump":
+        msg["Taxi"] = game_state.get("is_taxi", False)
+        msg["Multicrew"] = game_state.get("is_multicrew", False)
     
-    # --- ИНЪЕКЦИЯ КООРДИНАТ (SCAN + SAASignalsFound) ---
-    # Если это Scan или Сигналы, и в них нет координат — берем из памяти (Technical Truth)
-    if msg.get("event") in ["SAASignalsFound", "Scan"]:
+    # --- ИНЪЕКЦИЯ КООРДИНАТ (SCAN + SAASignalsFound + FSSBodySignals) ---
+    if msg.get("event") in ["SAASignalsFound", "Scan", "FSSBodySignals"]:
         if not msg.get("StarSystem") and game_state.get("star_system"):
             msg["StarSystem"] = game_state.get("star_system")
         if not msg.get("StarPos") and game_state.get("star_pos"):
@@ -109,7 +108,7 @@ def build_eddn_payload(event_data: dict, game_state: Optional[dict] = None) -> O
     # --- БЛОКИРОВКА ПРИ ОТСУТСТВИИ КООРДИНАТ ---
     # Если для события требуются координаты, но их все еще нет — НЕ ОТПРАВЛЯЕМ.
     # Это предотвращает HTTP 400 и спам битыми пакетами.
-    if msg.get("event") in ["FSDJump", "Location", "SAASignalsFound", "Scan"]:
+    if msg.get("event") in ["FSDJump", "SAASignalsFound", "Scan", "FSSBodySignals"]:
         if not msg.get("StarPos") or not isinstance(msg.get("StarPos"), list) or len(msg.get("StarPos")) != 3:
             # Для дебага можно раскомментировать
             # logging.warning(f"⚠️ EDDN: Missing StarPos for {msg.get('event')}. Skipping.")
@@ -120,8 +119,9 @@ def build_eddn_payload(event_data: dict, game_state: Optional[dict] = None) -> O
     if "timestamp" in msg:
         msg["timestamp"] = _timestamp_iso8601_no_ms(msg["timestamp"])
 
+    schema_ref = EDDN_SCHEMA_FSSBODYSIGNALS if msg.get("event") == "FSSBodySignals" else EDDN_SCHEMA_REF
     return {
-        "$schemaRef": EDDN_SCHEMA_REF,
+        "$schemaRef": schema_ref,
         "header": {
             "uploaderID": uploader_id,
             "softwareName": SOFTWARE_NAME,
