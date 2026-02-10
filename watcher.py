@@ -63,6 +63,19 @@ class JournalWatcher:
                 CURRENT_SESSION["star_system"] = event_data.get("StarSystem") or ""
             if event_data.get("StarPos") is not None:
                 CURRENT_SESSION["star_pos"] = event_data.get("StarPos") if isinstance(event_data.get("StarPos"), list) else []
+        # Technical Truth: DLC flags from Fileheader / LoadGame
+        if event_type in ("Fileheader", "LoadGame"):
+            if "Horizons" in event_data:
+                CURRENT_SESSION["is_horizons"] = bool(event_data.get("Horizons"))
+            if "Odyssey" in event_data:
+                CURRENT_SESSION["is_odyssey"] = bool(event_data.get("Odyssey"))
+        # Technical Truth: Taxi / Multicrew from travel events
+        _TRAVEL_EVENTS = ("Location", "Liftoff", "Touchdown", "SupercruiseEntry", "SupercruiseExit", "FSDJump", "Embark", "Disembark", "Docked", "Undocked")
+        if event_type in _TRAVEL_EVENTS:
+            if "Taxi" in event_data:
+                CURRENT_SESSION["is_taxi"] = bool(event_data.get("Taxi"))
+            if "Multicrew" in event_data:
+                CURRENT_SESSION["is_multicrew"] = bool(event_data.get("Multicrew"))
         
         rule = self.config.event_rules.get(event_type)
         
@@ -121,7 +134,19 @@ class JournalWatcher:
                             CURRENT_SESSION["gameversion"] = event_data.get("gameversion") or ""
                             CURRENT_SESSION["gamebuild"] = event_data.get("build") or ""
                     
-                    # ВОССТАНАВЛИВАЕМ КООРДИНАТЫ
+                    if event_type in ("Fileheader", "LoadGame"):
+                        if "Horizons" in event_data:
+                            CURRENT_SESSION["is_horizons"] = bool(event_data.get("Horizons"))
+                        if "Odyssey" in event_data:
+                            CURRENT_SESSION["is_odyssey"] = bool(event_data.get("Odyssey"))
+                    
+                    _TRAVEL_EVENTS = ("Location", "Liftoff", "Touchdown", "SupercruiseEntry", "SupercruiseExit", "FSDJump", "Embark", "Disembark", "Docked", "Undocked")
+                    if event_type in _TRAVEL_EVENTS:
+                        if "Taxi" in event_data:
+                            CURRENT_SESSION["is_taxi"] = bool(event_data.get("Taxi"))
+                        if "Multicrew" in event_data:
+                            CURRENT_SESSION["is_multicrew"] = bool(event_data.get("Multicrew"))
+                    
                     if event_type in ("FSDJump", "Location"):
                         if event_data.get("StarSystem"):
                             CURRENT_SESSION["star_system"] = event_data.get("StarSystem")

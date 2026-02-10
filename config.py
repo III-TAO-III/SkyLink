@@ -49,8 +49,12 @@ logging.basicConfig(
 )
 
 # --- Globals ---
-# Global session state (gameversion/build set from LoadGame for EDDN header; star_system/star_pos for SAASignalsFound)
-CURRENT_SESSION = {"commander": None, "api_key": None, "gameversion": "", "gamebuild": "", "star_system": "", "star_pos": []}
+# Global session state (gameversion/build from LoadGame; star_system/star_pos for EDDN; DLC/travel flags for Technical Truth)
+CURRENT_SESSION = {
+    "commander": None, "api_key": None, "gameversion": "", "gamebuild": "",
+    "star_system": "", "star_pos": [],
+    "is_horizons": False, "is_odyssey": False, "is_taxi": False, "is_multicrew": False,
+}
 # Global state for GUI (to avoid circular imports)
 UI_STATE = {
     "status": "WAITING",

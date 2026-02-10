@@ -27,27 +27,27 @@ ALLOWED_FIELDS = {
         "timestamp", "event", "StarSystem", "SystemAddress", "StarPos", "SystemAllegiance",
         "SystemEconomy", "SystemSecondEconomy", "SystemGovernment", "SystemSecurity",
         "Population", "Body", "BodyID", "BodyType", "Factions", "SystemFaction", "SystemState",
-        "horizons", "odyssey"
+        "horizons", "odyssey", "Taxi", "Multicrew"
     },
     "Scan": {
-        "timestamp", "event", "BodyName", "BodyID", "Parents", "StarSystem", "SystemAddress", # <-- ДОБАВЛЕНО StarSystem
+        "timestamp", "event", "BodyName", "BodyID", "Parents", "StarSystem", "SystemAddress",
         "DistanceFromArrivalLS", "StarType", "Subclass", "StellarMass", "Radius", "AbsoluteMagnitude",
         "Age_MY", "SurfaceTemperature", "Luminosity", "SemiMajorAxis", "Eccentricity",
         "OrbitalInclination", "Periapsis", "OrbitalPeriod", "AscendingNode", "MeanAnomaly",
         "RotationPeriod", "AxialTilt", "Rings", "WasDiscovered", "WasMapped", "WasFootfalled",
         "PlanetClass", "Atmosphere", "AtmosphereType", "AtmosphereComposition", "Volcanism",
-        "MassEM", "SurfaceGravity", "SurfacePressure", "Composition", "TerraformState", "TidalLock",
-        "horizons", "odyssey", "StarPos" # <-- ДОБАВЛЕНО StarPos
+        "MassEM", "SurfaceGravity", "SurfacePressure", "Landable", "Composition", "TerraformState", "TidalLock",
+        "horizons", "odyssey", "StarPos"
     },
     "SAASignalsFound": {
         "timestamp", "event", "BodyName", "SystemAddress", "BodyID", "Signals", "Genuses",
-        "StarSystem", "StarPos"
+        "StarSystem", "StarPos", "horizons", "odyssey"
     },
     "Location": {
         "timestamp", "event", "StarSystem", "SystemAddress", "StarPos", "SystemAllegiance",
         "SystemEconomy", "SystemSecondEconomy", "SystemGovernment", "SystemSecurity",
         "Population", "Body", "BodyID", "BodyType", "Factions", "SystemFaction", "SystemState",
-        "horizons", "odyssey"
+        "horizons", "odyssey", "Taxi", "Multicrew"
     },
 }
 
@@ -91,6 +91,12 @@ def build_eddn_payload(event_data: dict, game_state: Optional[dict] = None) -> O
 
     msg = _strip_localised_keys(deepcopy(event_data))
     msg = _normalize_flags(msg)
+    
+    # --- ИНЪЕКЦИЯ TECHNICAL TRUTH (DLC / Taxi / Multicrew из сессии) ---
+    msg["horizons"] = game_state.get("is_horizons", False)
+    msg["odyssey"] = game_state.get("is_odyssey", False)
+    msg["Taxi"] = game_state.get("is_taxi", False)
+    msg["Multicrew"] = game_state.get("is_multicrew", False)
     
     # --- ИНЪЕКЦИЯ КООРДИНАТ (SCAN + SAASignalsFound) ---
     # Если это Scan или Сигналы, и в них нет координат — берем из памяти (Technical Truth)
