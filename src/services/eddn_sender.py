@@ -39,9 +39,6 @@ ALLOWED_FIELDS = {
         "MassEM", "SurfaceGravity", "SurfacePressure", "Composition", "TerraformState", "TidalLock",
         "horizons", "odyssey", "StarPos" # <-- ДОБАВЛЕНО StarPos
     },
-    "FSSDiscoveryScan": {
-        "timestamp", "event", "BodyCount", "NonBodyCount", "SystemName", "SystemAddress"
-    },
     "SAASignalsFound": {
         "timestamp", "event", "BodyName", "SystemAddress", "BodyID", "Signals", "Genuses",
         "StarSystem", "StarPos"
@@ -62,8 +59,15 @@ def _filter_fields_by_schema(event_data: dict) -> dict:
     return {k: v for k, v in event_data.items() if k in allowed}
 
 def _strip_localised_keys(obj: Any) -> Any:
-    if not isinstance(obj, dict): return obj
-    return {k: _strip_localised_keys(v) for k, v in obj.items() if not (isinstance(k, str) and k.endswith("_Localised"))}
+    if isinstance(obj, dict):
+        return {
+            k: _strip_localised_keys(v)
+            for k, v in obj.items()
+            if not (isinstance(k, str) and k.endswith("_Localised"))
+        }
+    if isinstance(obj, list):
+        return [_strip_localised_keys(item) for item in obj]
+    return obj
 
 def _timestamp_iso8601_no_ms(ts: str) -> str:
     if not ts or not isinstance(ts, str): return ts
