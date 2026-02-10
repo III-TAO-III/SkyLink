@@ -1,4 +1,5 @@
 import os
+import asyncio
 import requests
 import json
 import logging
@@ -8,6 +9,9 @@ import time
 import hashlib
 from utils import calculate_hash, filter_event_fields
 from config import CURRENT_SESSION
+
+# EDDN: event types we send to EDDN (Scan, FSDJump, FSSDiscoveryScan, SAASignalsFound)
+EDDN_EVENT_TYPES = frozenset({"Scan", "FSDJump", "FSSDiscoveryScan", "SAASignalsFound"})
 
 # Глобальный регистр ошибок авторизации (хранится в оперативной памяти)
 FAILED_ACCOUNTS = set()
@@ -199,7 +203,17 @@ class Sender(threading.Thread):
                 self.hashes[cache_key] = event_hash
                 # save_hashes() after send — on success persist, on failure remove hash
 
-        # 4. Send the filtered event; при ошибке сети/сервера кладём в офлайн-очередь с меткой времени
+        # 4. EDDN: if this event type goes to EDDN, send it and mark eddnsent on payload for portal
+        if event_type in EDDN_EVENT_TYPES:
+            try:
+                from src.services.eddn_sender import send_to_eddn
+                eddn_ok = asyncio.run(send_to_eddn(event, game_state=CURRENT_SESSION))
+            except Exception as e:
+                logging.warning("EDDN send failed: %s", e)
+                eddn_ok = False
+            filtered_event["eddnsent"] = eddn_ok
+
+        # 5. Send the filtered event; при ошибке сети/сервера кладём в офлайн-очередь с меткой времени
         success, queue_on_failure = self._send_to_api(filtered_event)
         
         if not success and cache_key is not None and cache_key in self.hashes:

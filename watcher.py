@@ -55,6 +55,9 @@ class JournalWatcher:
             commander_name = event_data.get("Name") or event_data.get("Commander")
             if commander_name:
                 self.update_session(commander_name)
+        if event_type == "LoadGame":
+            CURRENT_SESSION["gameversion"] = event_data.get("gameversion") or ""
+            CURRENT_SESSION["gamebuild"] = event_data.get("build") or ""
         
         rule = self.config.event_rules.get(event_type)
         
@@ -101,6 +104,9 @@ class JournalWatcher:
                         commander_name = event_data.get("Name") or event_data.get("Commander")
                         if commander_name:
                             self.update_session(commander_name)
+                        if event_data['event'] == "LoadGame":
+                            CURRENT_SESSION["gameversion"] = event_data.get("gameversion") or ""
+                            CURRENT_SESSION["gamebuild"] = event_data.get("build") or ""
         except (IOError, OSError) as e:
             logging.warning("Could not sync session from journal: %s", e)
 

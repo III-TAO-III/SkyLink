@@ -49,8 +49,8 @@ logging.basicConfig(
 )
 
 # --- Globals ---
-# Global session state
-CURRENT_SESSION = {"commander": None, "api_key": None}
+# Global session state (gameversion/build set from LoadGame for EDDN header)
+CURRENT_SESSION = {"commander": None, "api_key": None, "gameversion": "", "gamebuild": ""}
 # Global state for GUI (to avoid circular imports)
 UI_STATE = {
     "status": "WAITING",
