@@ -8,10 +8,7 @@ import threading
 import time
 import hashlib
 from utils import calculate_hash, filter_event_fields
-from config import CURRENT_SESSION
-
-# EDDN: event types we send to EDDN (Scan, FSDJump, FSSDiscoveryScan, SAASignalsFound)
-EDDN_EVENT_TYPES = frozenset({"Scan", "FSDJump", "FSSDiscoveryScan", "SAASignalsFound"})
+from config import CURRENT_SESSION, EDDN_REQUIRED_EVENTS  # <-- ИСПОЛЬЗУЕМ ГЛОБАЛЬНЫЙ СПИСОК
 
 # Глобальный регистр ошибок авторизации (хранится в оперативной памяти)
 FAILED_ACCOUNTS = set()
@@ -169,8 +166,6 @@ class Sender(threading.Thread):
             return
 
         # --- GLOBAL FILTER: Игнорируем SquadronCarrier ---
-        # Это защищает нас от CarrierLocation, CarrierJump и любых других событий,
-        # связанных с общими флотоносцами эскадрильи.
         if event.get('CarrierType') == 'SquadronCarrier':
             return
         # -------------------------------------------------
@@ -204,13 +199,20 @@ class Sender(threading.Thread):
                 # save_hashes() after send — on success persist, on failure remove hash
 
         # 4. EDDN: if this event type goes to EDDN, send it and mark eddnsent on payload for portal
-        if event_type in EDDN_EVENT_TYPES:
+        # ИСПОЛЬЗУЕМ ГЛОБАЛЬНЫЙ СПИСОК ИЗ CONFIG
+        eddn_ok = False
+        if event_type in EDDN_REQUIRED_EVENTS:
             try:
+                # Импорт внутри метода, чтобы избежать круговых зависимостей и проблем при инициализации
                 from src.services.eddn_sender import send_to_eddn
                 eddn_ok = asyncio.run(send_to_eddn(event, game_state=CURRENT_SESSION))
             except Exception as e:
                 logging.warning("EDDN send failed: %s", e)
                 eddn_ok = False
+        
+        # Ставим флаг только если событие было отправлено (True/False). 
+        # Если событие не для EDDN, флаг не ставится (или можно ставить None/False по желанию)
+        if event_type in EDDN_REQUIRED_EVENTS:
             filtered_event["eddnsent"] = eddn_ok
 
         # 5. Send the filtered event; при ошибке сети/сервера кладём в офлайн-очередь с меткой времени
@@ -267,7 +269,7 @@ class Sender(threading.Thread):
         headers = {
             'Content-Type': 'application/json',
             'User-Agent': self.config.USER_AGENT,
-            'x-api-key': api_key,    # <--- ИСПОЛЬЗУЕМ НАЙДЕННЫЙ ПЕРЕМЕННУЮ api_key
+            'x-api-key': api_key,
             'x-commander': cmdr_name
         }
 
@@ -281,11 +283,9 @@ class Sender(threading.Thread):
                 # [НОВОЕ] Логика Желтого статуса
                 event_type = event.get('event')
                 if event_type == 'Shutdown':
-                    # Если событие Shutdown — ставим Желтый (Waiting)
                     logging.info("🛑 Game Shutdown detected. Switching to standby.")
                     self.update_status('Waiting', 'Game closed. Waiting for Commander...')
                 else:
-                    # Любое другое событие — ставим Зеленый (Running)
                     event_type = event.get('event', 'Event')
                     self.update_status('Running', f'Event {event_type} sent')
 
@@ -300,13 +300,13 @@ class Sender(threading.Thread):
                 self.update_status('Error', f'Auth Error {response.status_code} for {cmdr_name}')
                 return (False, False)
 
-            # --- 3. ОШИБКА СЕРВЕРА — ставим в офлайн-очередь (вызывающий код добавит с timestamp)
+            # --- 3. ОШИБКА СЕРВЕРА — ставим в офлайн-очередь
             else:
                 logging.error(f"Failed to send event: {response.status_code} - {response.text}")
                 self.update_status('Error', 'Failed to send event, queuing.')
                 return (False, True)
 
-        # --- 4. ОШИБКА СЕТИ — ставим в офлайн-очередь (вызывающий код добавит с timestamp)
+        # --- 4. ОШИБКА СЕТИ — ставим в офлайн-очередь
         except requests.RequestException as e:
             logging.error(f"Network error while sending event: {e}")
             self.update_status('Error', 'Network error, queuing event.')
@@ -333,4 +333,3 @@ class Sender(threading.Thread):
                 time.sleep(OFFLINE_RETRY_PAUSE_SEC)
             else:
                 self.update_status('Running', 'Offline queue cleared.')
-

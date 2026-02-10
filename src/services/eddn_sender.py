@@ -22,7 +22,6 @@ SOFTWARE_NAME = "skybioml.net"
 SOFTWARE_VERSION = "1.4.0"
 
 # БЕЛЫЙ СПИСОК ПОЛЕЙ (согласно схеме journal/1)
-# Любое поле НЕ из этого списка вызовет HTTP 400
 ALLOWED_FIELDS = {
     "FSDJump": {
         "timestamp", "event", "StarSystem", "SystemAddress", "StarPos", "SystemAllegiance",
@@ -31,31 +30,35 @@ ALLOWED_FIELDS = {
         "horizons", "odyssey"
     },
     "Scan": {
-        "timestamp", "event", "BodyName", "BodyID", "Parents", "StarSystem", "SystemAddress",
+        "timestamp", "event", "BodyName", "BodyID", "Parents", "StarSystem", "SystemAddress", # <-- ДОБАВЛЕНО StarSystem
         "DistanceFromArrivalLS", "StarType", "Subclass", "StellarMass", "Radius", "AbsoluteMagnitude",
         "Age_MY", "SurfaceTemperature", "Luminosity", "SemiMajorAxis", "Eccentricity",
         "OrbitalInclination", "Periapsis", "OrbitalPeriod", "AscendingNode", "MeanAnomaly",
         "RotationPeriod", "AxialTilt", "Rings", "WasDiscovered", "WasMapped", "WasFootfalled",
         "PlanetClass", "Atmosphere", "AtmosphereType", "AtmosphereComposition", "Volcanism",
         "MassEM", "SurfaceGravity", "SurfacePressure", "Composition", "TerraformState", "TidalLock",
-        "horizons", "odyssey"
+        "horizons", "odyssey", "StarPos" # <-- ДОБАВЛЕНО StarPos
     },
     "FSSDiscoveryScan": {
         "timestamp", "event", "BodyCount", "NonBodyCount", "SystemName", "SystemAddress"
     },
     "SAASignalsFound": {
-        "timestamp", "event", "BodyName", "SystemAddress", "BodyID", "Signals", "Genuses"
-    }
+        "timestamp", "event", "BodyName", "SystemAddress", "BodyID", "Signals", "Genuses",
+        "StarSystem", "StarPos"
+    },
+    "Location": {
+        "timestamp", "event", "StarSystem", "SystemAddress", "StarPos", "SystemAllegiance",
+        "SystemEconomy", "SystemSecondEconomy", "SystemGovernment", "SystemSecurity",
+        "Population", "Body", "BodyID", "BodyType", "Factions", "SystemFaction", "SystemState",
+        "horizons", "odyssey"
+    },
 }
 
 def _filter_fields_by_schema(event_data: dict) -> dict:
-    """Оставляет в сообщении только те поля, которые разрешены схемой EDDN."""
     event_type = event_data.get("event")
     allowed = ALLOWED_FIELDS.get(event_type)
-    
     if not allowed:
-        return event_data # Если события нет в списке, шлем как есть (на свой страх и риск)
-
+        return event_data
     return {k: v for k, v in event_data.items() if k in allowed}
 
 def _strip_localised_keys(obj: Any) -> Any:
@@ -76,17 +79,32 @@ def _normalize_flags(message: dict) -> dict:
             out[key.lower()] = bool(val)
     return out
 
-def build_eddn_payload(event_data: dict, game_state: Optional[dict] = None) -> dict:
+def build_eddn_payload(event_data: dict, game_state: Optional[dict] = None) -> Optional[dict]:
     game_state = game_state or {}
     uploader_id = game_state.get("commander") or "Unknown_Commander"
     gameversion = game_state.get("gameversion") or "4.3.0.1"
     gamebuild = game_state.get("gamebuild") or "r322188/r0 "
 
-    # 1. Сначала чистим локализацию и нормализуем флаги
     msg = _strip_localised_keys(deepcopy(event_data))
     msg = _normalize_flags(msg)
     
-    # 2. СТРОГАЯ ФИЛЬТРАЦИЯ ПО БЕЛОМУ СПИСКУ
+    # --- ИНЪЕКЦИЯ КООРДИНАТ (SCAN + SAASignalsFound) ---
+    # Если это Scan или Сигналы, и в них нет координат — берем из памяти (Technical Truth)
+    if msg.get("event") in ["SAASignalsFound", "Scan"]:
+        if not msg.get("StarSystem") and game_state.get("star_system"):
+            msg["StarSystem"] = game_state.get("star_system")
+        if not msg.get("StarPos") and game_state.get("star_pos"):
+            msg["StarPos"] = game_state.get("star_pos")
+    
+    # --- БЛОКИРОВКА ПРИ ОТСУТСТВИИ КООРДИНАТ ---
+    # Если для события требуются координаты, но их все еще нет — НЕ ОТПРАВЛЯЕМ.
+    # Это предотвращает HTTP 400 и спам битыми пакетами.
+    if msg.get("event") in ["FSDJump", "Location", "SAASignalsFound", "Scan"]:
+        if not msg.get("StarPos") or not isinstance(msg.get("StarPos"), list) or len(msg.get("StarPos")) != 3:
+            # Для дебага можно раскомментировать
+            # logging.warning(f"⚠️ EDDN: Missing StarPos for {msg.get('event')}. Skipping.")
+            return None
+
     msg = _filter_fields_by_schema(msg)
 
     if "timestamp" in msg:
@@ -108,7 +126,9 @@ async def send_to_eddn(event_data: dict, game_state: Optional[dict] = None, time
     if aiohttp is None: return False
     payload = build_eddn_payload(event_data, game_state)
     
-    # Оставляем короткий дебаг, чтобы видеть только ивент и статус
+    if payload is None:
+        return False # Пакет не прошел валидацию (нет координат)
+
     logging.info(f"🚀 EDDN: Sending {event_data.get('event')}...")
 
     try:

@@ -49,8 +49,8 @@ logging.basicConfig(
 )
 
 # --- Globals ---
-# Global session state (gameversion/build set from LoadGame for EDDN header)
-CURRENT_SESSION = {"commander": None, "api_key": None, "gameversion": "", "gamebuild": ""}
+# Global session state (gameversion/build set from LoadGame for EDDN header; star_system/star_pos for SAASignalsFound)
+CURRENT_SESSION = {"commander": None, "api_key": None, "gameversion": "", "gamebuild": "", "star_system": "", "star_pos": []}
 # Global state for GUI (to avoid circular imports)
 UI_STATE = {
     "status": "WAITING",
@@ -58,6 +58,9 @@ UI_STATE = {
     "commander": None,
     "auth_required": False
 }
+
+# EDDN: event types that must be sent to EDDN even if events.json marks them "ignore" for portal
+EDDN_REQUIRED_EVENTS = frozenset({"Scan", "FSDJump", "FSSDiscoveryScan", "SAASignalsFound", "Location"})
 
 
 def get_resource_path(relative_path):
