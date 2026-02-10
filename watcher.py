@@ -87,11 +87,12 @@ class JournalWatcher:
         if rule:
             action = rule.get('action', action)
 
-        is_eddn_event = event_type in EDDN_REQUIRED_EVENTS
-        should_queue = (action == 'send') or is_eddn_event
+        is_eddn = event_type in EDDN_REQUIRED_EVENTS
+        should_queue = (action == 'send') or is_eddn
 
         if should_queue:
-            logging.info(f"Processing event: {event_type} (EDDN Required: {is_eddn_event})")
+            event_data["_send_to_portal"] = (action == 'send')
+            logging.info(f"Processing event: {event_type} (EDDN Required: {is_eddn})")
             self.sender.queue_event(event_data)
         else:
             logging.debug(f"Ignoring event based on rule or default action: {event_type}")

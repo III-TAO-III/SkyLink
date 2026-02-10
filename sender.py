@@ -160,7 +160,8 @@ class Sender(threading.Thread):
         self.stop_event.set()
 
     def process_event(self, event):
-        """Processes a single event: schema update, filtering, and deduplication."""
+        """Processes a single event: routes to EDDN and/or Portal based on config."""
+        send_to_portal = event.pop("_send_to_portal", False)
         event_type = event.get('event')
         if not event_type:
             return
@@ -170,62 +171,47 @@ class Sender(threading.Thread):
             return
         # -------------------------------------------------
 
-        # 1. Update schema before doing anything else
-        self.config.update_field_schema(event_type, event)
-        
-        # 2. Filter the event based on field rules
-        field_rules = self.config.field_rules.get("filters", {}).get(event_type, {})
-        filtered_event = filter_event_fields(event, field_rules)
-        
-        commander_name = CURRENT_SESSION.get("commander", "Unknown")
-        api_key = self._resolve_api_key(commander_name)
-        
-        # 3. Handle deduplication based on event rules (hash only when commander has API key)
-        rule = self.config.event_rules.get(event_type)
-        cache_key = None
-        if rule and rule.get('deduplicate'):
-            cache_key = f"{commander_name}|{event_type}"
-            if api_key:
-                # Create a copy for hashing, excluding volatile fields
-                content_to_hash = filtered_event.copy()
-                content_to_hash.pop("timestamp", None)
-                content_to_hash.pop("event", None)
-                content_str = f"{commander_name}|{json.dumps(content_to_hash, sort_keys=True)}"
-                event_hash = hashlib.sha256(content_str.encode('utf-8')).hexdigest()
-                if self.hashes.get(cache_key) == event_hash:
-                    logging.info(f"Skipping duplicate event for {commander_name}: {event_type}")
-                    return
-                self.hashes[cache_key] = event_hash
-                # save_hashes() after send — on success persist, on failure remove hash
-
-        # 4. EDDN: if this event type goes to EDDN, send it and mark eddnsent on payload for portal
-        # ИСПОЛЬЗУЕМ ГЛОБАЛЬНЫЙ СПИСОК ИЗ CONFIG
+        # --- EDDN dispatch (independent of Portal) ---
         eddn_ok = False
         if event_type in EDDN_REQUIRED_EVENTS:
             try:
-                # Импорт внутри метода, чтобы избежать круговых зависимостей и проблем при инициализации
                 from src.services.eddn_sender import send_to_eddn
                 eddn_ok = asyncio.run(send_to_eddn(event, game_state=CURRENT_SESSION))
             except Exception as e:
                 logging.warning("EDDN send failed: %s", e)
                 eddn_ok = False
-        
-        # Ставим флаг только если событие было отправлено (True/False). 
-        # Если событие не для EDDN, флаг не ставится (или можно ставить None/False по желанию)
-        if event_type in EDDN_REQUIRED_EVENTS:
-            filtered_event["eddnsent"] = eddn_ok
 
-        # 5. Send the filtered event; при ошибке сети/сервера кладём в офлайн-очередь с меткой времени
-        success, queue_on_failure = self._send_to_api(filtered_event)
-        
-        if not success and cache_key is not None and cache_key in self.hashes:
-            self.hashes.pop(cache_key)
-            self.save_hashes()
-        elif success and cache_key is not None and cache_key in self.hashes:
-            self.save_hashes()
-        
-        if not success and queue_on_failure:
-            self.offline_queue.put((filtered_event, time.time()))
+        # --- Portal dispatch (only when authorized by events.json) ---
+        if send_to_portal:
+            self.config.update_field_schema(event_type, event)
+            field_rules = self.config.field_rules.get("filters", {}).get(event_type, {})
+            filtered_event = filter_event_fields(event, field_rules)
+            commander_name = CURRENT_SESSION.get("commander", "Unknown")
+            api_key = self._resolve_api_key(commander_name)
+            rule = self.config.event_rules.get(event_type)
+            cache_key = None
+            if rule and rule.get('deduplicate'):
+                cache_key = f"{commander_name}|{event_type}"
+                if api_key:
+                    content_to_hash = filtered_event.copy()
+                    content_to_hash.pop("timestamp", None)
+                    content_to_hash.pop("event", None)
+                    content_str = f"{commander_name}|{json.dumps(content_to_hash, sort_keys=True)}"
+                    event_hash = hashlib.sha256(content_str.encode('utf-8')).hexdigest()
+                    if self.hashes.get(cache_key) == event_hash:
+                        logging.info(f"Skipping duplicate event for {commander_name}: {event_type}")
+                        return
+                    self.hashes[cache_key] = event_hash
+            if event_type in EDDN_REQUIRED_EVENTS:
+                filtered_event["eddnsent"] = eddn_ok
+            success, queue_on_failure = self._send_to_api(filtered_event)
+            if not success and cache_key is not None and cache_key in self.hashes:
+                self.hashes.pop(cache_key)
+                self.save_hashes()
+            elif success and cache_key is not None and cache_key in self.hashes:
+                self.save_hashes()
+            if not success and queue_on_failure:
+                self.offline_queue.put((filtered_event, time.time()))
 
     def _log_event_details(self, event):
         """Logs detailed information for specific events."""
