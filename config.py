@@ -226,6 +226,18 @@ class Config:
                 logging.error(f"Could not load discovery file: {e}")
                 self.discovered_fields = {}
 
+    def register_new_event(self, event_type):
+        """
+        Records a new (unknown) event type in discovery.json for analysis.
+        Does not duplicate if the event type is already present.
+        Does NOT modify event_rules or affect sending to the portal.
+        """
+        if event_type in self.discovered_fields:
+            return
+        self.discovered_fields[event_type] = []
+        self._save_json(self.discovery_file, self.discovered_fields)
+        logging.info(f"✨ New event type discovered: '{event_type}'. Logged to discovery.json.")
+
     def update_field_schema(self, event_type, event_data):
         """
         Logs new, unknown fields to `discovery.json` for analysis.

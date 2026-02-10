@@ -81,11 +81,10 @@ class JournalWatcher:
         
         if not rule:
             self.config.register_new_event(event_type)
-            rule = self.config.event_rules.get(event_type)
-
-        action = self.config.default_action
-        if rule:
-            action = rule.get('action', action)
+            self.config.update_field_schema(event_type, event_data)
+            action = 'ignore'
+        else:
+            action = rule.get('action', self.config.default_action)
 
         is_eddn = event_type in EDDN_REQUIRED_EVENTS
         should_queue = (action == 'send') or is_eddn
