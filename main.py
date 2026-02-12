@@ -1,20 +1,22 @@
 import logging
 import time
-from config import Config, UI_STATE
-from sender import Sender, FAILED_ACCOUNTS
-from watcher import JournalWatcher
+
+from config import UI_STATE, Config
 from heartbeat import HeartbeatService
+from sender import FAILED_ACCOUNTS, Sender
+from watcher import JournalWatcher
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # --- Global Instances ---
-# Убираем жесткое создание Config() здесь. 
+# Убираем жесткое создание Config() здесь.
 # Пусть config будет None, пока мы его не инициализируем.
 config = None
 sender = None
 watcher = None
 heartbeat = None
+
 
 def update_ui_state(status, message):
     """Callback to update the global UI state from background threads."""
@@ -22,7 +24,12 @@ def update_ui_state(status, message):
 
     # При 401/403 запрашиваем автооткрытие окна из трея (GUI обработает в update_ui_loop)
     msg = (message or "").lower()
-    if status and status.lower() == "error" and "auth error" in msg and ("401" in (message or "") or "403" in (message or "")):
+    if (
+        status
+        and status.lower() == "error"
+        and "auth error" in msg
+        and ("401" in (message or "") or "403" in (message or ""))
+    ):
         UI_STATE["request_show_window"] = True
 
     st_lower = status.lower()
@@ -32,6 +39,7 @@ def update_ui_state(status, message):
         UI_STATE["color"] = "red"
     else:
         UI_STATE["color"] = "gray"
+
 
 # --- ИЗМЕНЕНИЕ: Добавляем аргумент shared_config ---
 def start_background_service(shared_config=None):
@@ -47,15 +55,17 @@ def start_background_service(shared_config=None):
     else:
         config = Config()
 
-    cache_file = config.app_data_dir / 'deduplication_cache.json'
-    
+    cache_file = config.app_data_dir / "deduplication_cache.json"
+
     # Теперь Sender использует ТОТ ЖЕ config, что и GUI
     sender = Sender(cache_path=cache_file, config=config)
     sender.set_status_callback(update_ui_state)
     sender.start()
 
     if config.journal_path:
-        watcher = JournalWatcher(journal_dir=config.journal_path, sender_instance=sender, config=config)
+        watcher = JournalWatcher(
+            journal_dir=config.journal_path, sender_instance=sender, config=config
+        )
         watcher.start()
         logging.info("👀 Journal watcher started.")
     else:
@@ -70,6 +80,7 @@ def start_background_service(shared_config=None):
             time.sleep(1)
     except KeyboardInterrupt:
         stop_background_service()
+
 
 def stop_background_service():
     """Stops the background services gracefully."""
@@ -89,5 +100,6 @@ def stop_background_service():
 
     logging.info("✅ Background services stopped (or forced).")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     start_background_service()

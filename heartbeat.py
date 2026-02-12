@@ -2,8 +2,10 @@
 HeartbeatService: periodic "skylinkbeat" signals for all configured accounts.
 Runs in a dedicated daemon thread; does not block main UI or other services.
 """
+
 import logging
 import threading
+
 import requests
 
 
@@ -42,7 +44,9 @@ class HeartbeatService(threading.Thread):
                         timeout=5,
                     )
                     if response.status_code == 200:
-                        self.failed_accounts.discard(cmdr_name)  # успешный beat — снимаем INVALID в UI
+                        self.failed_accounts.discard(
+                            cmdr_name
+                        )  # успешный beat — снимаем INVALID в UI
                         logging.debug("Heartbeat OK for %s", cmdr_name)
                     elif response.status_code in (401, 403):
                         self.failed_accounts.add(cmdr_name)

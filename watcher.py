@@ -1,15 +1,16 @@
 import logging
 import time
-import os
 from pathlib import Path
-from watchdog.observers import Observer
+
 from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
+
+from config import CURRENT_SESSION, EDDN_REQUIRED_EVENTS
 from utils import parse_json_line
-from config import Config, CURRENT_SESSION, EDDN_REQUIRED_EVENTS
-from sender import Sender
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
 
 class JournalWatcher:
     def __init__(self, journal_dir, sender_instance, config):
@@ -22,11 +23,11 @@ class JournalWatcher:
 
     def find_latest_log_file(self):
         """Finds the most recently modified journal log file."""
-        log_files = list(self.journal_dir.glob('Journal.*.log'))
+        log_files = list(self.journal_dir.glob("Journal.*.log"))
         if not log_files:
             logging.warning("No journal files found in the specified directory.")
             return None
-        
+
         latest_file = max(log_files, key=lambda f: f.stat().st_mtime)
         logging.info(f"Monitoring latest journal file: {latest_file}")
         return latest_file
@@ -34,21 +35,21 @@ class JournalWatcher:
     def process_new_lines(self):
         """Reads new lines from the latest log file and processes them."""
         if self.latest_log_file and self.latest_log_file.exists():
-            with open(self.latest_log_file, 'r', encoding='utf-8') as f:
+            with open(self.latest_log_file, "r", encoding="utf-8") as f:
                 f.seek(self.last_file_position)
                 new_lines = f.readlines()
                 self.last_file_position = f.tell()
-                
+
                 for line in new_lines:
                     self.process_line(line)
 
     def process_line(self, line):
         """Parses a line and processes the event based on defined rules."""
         event_data = parse_json_line(line)
-        if not event_data or 'event' not in event_data:
+        if not event_data or "event" not in event_data:
             return
 
-        event_type = event_data['event']
+        event_type = event_data["event"]
 
         # --- Session Switching Logic ---
         if event_type in ["Commander", "LoadGame"]:
@@ -62,7 +63,9 @@ class JournalWatcher:
             if event_data.get("StarSystem") is not None:
                 CURRENT_SESSION["star_system"] = event_data.get("StarSystem") or ""
             if event_data.get("StarPos") is not None:
-                CURRENT_SESSION["star_pos"] = event_data.get("StarPos") if isinstance(event_data.get("StarPos"), list) else []
+                CURRENT_SESSION["star_pos"] = (
+                    event_data.get("StarPos") if isinstance(event_data.get("StarPos"), list) else []
+                )
         # Technical Truth: DLC flags from Fileheader / LoadGame
         if event_type in ("Fileheader", "LoadGame"):
             if "Horizons" in event_data:
@@ -70,27 +73,38 @@ class JournalWatcher:
             if "Odyssey" in event_data:
                 CURRENT_SESSION["is_odyssey"] = bool(event_data.get("Odyssey"))
         # Technical Truth: Taxi / Multicrew from travel events
-        _TRAVEL_EVENTS = ("Location", "Liftoff", "Touchdown", "SupercruiseEntry", "SupercruiseExit", "FSDJump", "Embark", "Disembark", "Docked", "Undocked")
+        _TRAVEL_EVENTS = (
+            "Location",
+            "Liftoff",
+            "Touchdown",
+            "SupercruiseEntry",
+            "SupercruiseExit",
+            "FSDJump",
+            "Embark",
+            "Disembark",
+            "Docked",
+            "Undocked",
+        )
         if event_type in _TRAVEL_EVENTS:
             if "Taxi" in event_data:
                 CURRENT_SESSION["is_taxi"] = bool(event_data.get("Taxi"))
             if "Multicrew" in event_data:
                 CURRENT_SESSION["is_multicrew"] = bool(event_data.get("Multicrew"))
-        
+
         rule = self.config.event_rules.get(event_type)
-        
+
         if not rule:
             self.config.register_new_event(event_type)
             self.config.update_field_schema(event_type, event_data)
-            action = 'ignore'
+            action = "ignore"
         else:
-            action = rule.get('action', self.config.default_action)
+            action = rule.get("action", self.config.default_action)
 
         is_eddn = event_type in EDDN_REQUIRED_EVENTS
-        should_queue = (action == 'send') or is_eddn
+        should_queue = (action == "send") or is_eddn
 
         if should_queue:
-            event_data["_send_to_portal"] = (action == 'send')
+            event_data["_send_to_portal"] = action == "send"
             logging.info(f"Processing event: {event_type} (EDDN Required: {is_eddn})")
             self.sender.queue_event(event_data)
         else:
@@ -99,33 +113,35 @@ class JournalWatcher:
     def update_session(self, commander_name):
         """Updates the current session based on the detected commander."""
         if CURRENT_SESSION["commander"] == commander_name:
-            return # No change
+            return  # No change
 
         CURRENT_SESSION["commander"] = commander_name
         api_key = self.config.accounts.get(commander_name)
-        
+
         if api_key:
             CURRENT_SESSION["api_key"] = api_key
             logging.info(f"🚀 Switched session to Commander: {commander_name}")
         else:
             CURRENT_SESSION["api_key"] = None
-            logging.warning(f"🚨 No API Key found for Commander: {commander_name}. Events will not be sent.")
+            logging.warning(
+                f"🚨 No API Key found for Commander: {commander_name}. Events will not be sent."
+            )
 
     def _sync_session_from_file(self):
         """Читает журнал с начала и восстанавливает сессию (Командир, Версия, Координаты)."""
         if not self.latest_log_file or not self.latest_log_file.exists():
             return
         try:
-            with open(self.latest_log_file, 'r', encoding='utf-8') as f:
+            with open(self.latest_log_file, "r", encoding="utf-8") as f:
                 for line in f:
                     event_data = parse_json_line(line)
-                    if not event_data or 'event' not in event_data:
+                    if not event_data or "event" not in event_data:
                         continue
-                    
+
                     # Используем ту же логику, что и в реальном времени, чтобы не дублировать код
                     # Но нам нужно обновлять только сессию, а не отправлять события
-                    event_type = event_data['event']
-                    
+                    event_type = event_data["event"]
+
                     if event_type in ["Commander", "LoadGame"]:
                         commander_name = event_data.get("Name") or event_data.get("Commander")
                         if commander_name:
@@ -133,27 +149,38 @@ class JournalWatcher:
                         if event_type == "LoadGame":
                             CURRENT_SESSION["gameversion"] = event_data.get("gameversion") or ""
                             CURRENT_SESSION["gamebuild"] = event_data.get("build") or ""
-                    
+
                     if event_type in ("Fileheader", "LoadGame"):
                         if "Horizons" in event_data:
                             CURRENT_SESSION["is_horizons"] = bool(event_data.get("Horizons"))
                         if "Odyssey" in event_data:
                             CURRENT_SESSION["is_odyssey"] = bool(event_data.get("Odyssey"))
-                    
-                    _TRAVEL_EVENTS = ("Location", "Liftoff", "Touchdown", "SupercruiseEntry", "SupercruiseExit", "FSDJump", "Embark", "Disembark", "Docked", "Undocked")
+
+                    _TRAVEL_EVENTS = (
+                        "Location",
+                        "Liftoff",
+                        "Touchdown",
+                        "SupercruiseEntry",
+                        "SupercruiseExit",
+                        "FSDJump",
+                        "Embark",
+                        "Disembark",
+                        "Docked",
+                        "Undocked",
+                    )
                     if event_type in _TRAVEL_EVENTS:
                         if "Taxi" in event_data:
                             CURRENT_SESSION["is_taxi"] = bool(event_data.get("Taxi"))
                         if "Multicrew" in event_data:
                             CURRENT_SESSION["is_multicrew"] = bool(event_data.get("Multicrew"))
-                    
+
                     if event_type in ("FSDJump", "Location"):
                         if event_data.get("StarSystem"):
                             CURRENT_SESSION["star_system"] = event_data.get("StarSystem")
                         if event_data.get("StarPos"):
                             val = event_data.get("StarPos")
                             CURRENT_SESSION["star_pos"] = val if isinstance(val, list) else []
-                            
+
         except (IOError, OSError) as e:
             logging.warning("Could not sync session from journal: %s", e)
 
@@ -177,6 +204,7 @@ class JournalWatcher:
         self.observer.join()
         logging.info("Journal watcher stopped.")
 
+
 class JournalFileHandler(FileSystemEventHandler):
     def __init__(self, watcher):
         self.watcher = watcher
@@ -188,21 +216,22 @@ class JournalFileHandler(FileSystemEventHandler):
 
     def on_created(self, event):
         """Called when a file or directory is created."""
-        if not event.is_directory and 'Journal' in Path(event.src_path).name:
+        if not event.is_directory and "Journal" in Path(event.src_path).name:
             logging.info(f"New journal file detected: {event.src_path}")
             self.watcher.latest_log_file = Path(event.src_path)
             self.watcher.last_file_position = 0
             self.watcher.process_new_lines()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     # For testing purposes
     # Create a dummy journal directory and file
-    dummy_dir = Path('./dummy_journal')
+    dummy_dir = Path("./dummy_journal")
     dummy_dir.mkdir(exist_ok=True)
-    
+
     # You would replace this with your actual journal path from config
     journal_path = str(dummy_dir)
-    
+
     # Dummy sender
     class DummySender:
         def send_event(self, event):
@@ -218,14 +247,14 @@ if __name__ == '__main__':
         log_file = watcher.find_latest_log_file()
         if not log_file:
             log_file = dummy_dir / f"Journal.{time.strftime('%Y%m%d%H%M%S')}.01.log"
-        
-        with open(log_file, 'a', encoding='utf-8') as f:
+
+        with open(log_file, "a", encoding="utf-8") as f:
             f.write('{"event": "LoadGame", "Commander": "Test"}\\n')
         time.sleep(2)
-        with open(log_file, 'a', encoding='utf-8') as f:
-            f.write('{"event": "Music", "MusicTrack": "NoTrack"}\\n') # This should be ignored
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write('{"event": "Music", "MusicTrack": "NoTrack"}\\n')  # This should be ignored
         time.sleep(2)
-        with open(log_file, 'a', encoding='utf-8') as f:
+        with open(log_file, "a", encoding="utf-8") as f:
             f.write('{"event": "FSDJump", "StarSystem": "Sol"}\\n')
         time.sleep(5)
 

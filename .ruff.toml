@@ -1,0 +1,12 @@
+# Исправленная конфигурация для автономного .ruff.toml
+line-length = 100
+target-version = "py311"
+
+[lint]
+# Включаем стандартные проверки (Pyflakes, pycodestyle)
+select = ["E", "F", "W", "I"]
+ignore = []
+
+[format]
+quote-style = "double"
+indent-style = "space"

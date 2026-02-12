@@ -1,24 +1,27 @@
-import os
 import asyncio
-import requests
+import hashlib
 import json
 import logging
+import os
 import queue
 import threading
 import time
-import hashlib
-from utils import calculate_hash, filter_event_fields
+
+import requests
+
 from config import CURRENT_SESSION, EDDN_REQUIRED_EVENTS  # <-- ИСПОЛЬЗУЕМ ГЛОБАЛЬНЫЙ СПИСОК
+from utils import filter_event_fields
 
 # Глобальный регистр ошибок авторизации (хранится в оперативной памяти)
 FAILED_ACCOUNTS = set()
 
 # Офлайн-очередь: таймаут жизни пакета и пауза между переотправками
-OFFLINE_QUEUE_TIMEOUT_SEC = 120   # 2 минуты — затем пакет удаляется
-OFFLINE_RETRY_PAUSE_SEC = 10      # пауза между попытками отправки
+OFFLINE_QUEUE_TIMEOUT_SEC = 120  # 2 минуты — затем пакет удаляется
+OFFLINE_RETRY_PAUSE_SEC = 10  # пауза между попытками отправки
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
 
 class Sender(threading.Thread):
     def __init__(self, cache_path, config):
@@ -46,7 +49,7 @@ class Sender(threading.Thread):
                 logging.warning("Could not clear dedup cache marker: %s", e)
         if self.cache_path.exists():
             try:
-                with open(self.cache_path, 'r') as f:
+                with open(self.cache_path, "r") as f:
                     # Handle empty file case
                     content = f.read()
                     if not content:
@@ -67,7 +70,7 @@ class Sender(threading.Thread):
         abs_path = os.path.abspath(self.cache_path)
         logging.info(f"💾 Saving cache to: {abs_path}")
         try:
-            with open(self.cache_path, 'w') as f:
+            with open(self.cache_path, "w") as f:
                 json.dump(self.hashes, f, indent=2)
         except IOError as e:
             logging.error(f"Failed to save deduplication cache: {e}")
@@ -117,7 +120,7 @@ class Sender(threading.Thread):
             return
 
         try:
-            with open(cache_path, 'r') as f:
+            with open(cache_path, "r") as f:
                 content = f.read()
                 if not content:
                     hashes = {}
@@ -127,7 +130,7 @@ class Sender(threading.Thread):
             return
 
         keys_to_delete = [key for key in hashes if key.startswith(f"{commander_name}|")]
-        
+
         if not keys_to_delete:
             return
 
@@ -135,7 +138,7 @@ class Sender(threading.Thread):
             del hashes[key]
 
         try:
-            with open(cache_path, 'w') as f:
+            with open(cache_path, "w") as f:
                 json.dump(hashes, f, indent=2)
             logging.info(f"Cache purged for commander: {commander_name}")
         except IOError:
@@ -162,12 +165,12 @@ class Sender(threading.Thread):
     def process_event(self, event):
         """Processes a single event: routes to EDDN and/or Portal based on config."""
         send_to_portal = event.pop("_send_to_portal", False)
-        event_type = event.get('event')
+        event_type = event.get("event")
         if not event_type:
             return
 
         # --- GLOBAL FILTER: Игнорируем SquadronCarrier ---
-        if event.get('CarrierType') == 'SquadronCarrier':
+        if event.get("CarrierType") == "SquadronCarrier":
             return
         # -------------------------------------------------
 
@@ -176,6 +179,7 @@ class Sender(threading.Thread):
         if event_type in EDDN_REQUIRED_EVENTS:
             try:
                 from src.services.eddn_sender import send_to_eddn
+
                 eddn_ok = asyncio.run(send_to_eddn(event, game_state=CURRENT_SESSION))
             except Exception as e:
                 logging.warning("EDDN send failed: %s", e)
@@ -190,14 +194,14 @@ class Sender(threading.Thread):
             api_key = self._resolve_api_key(commander_name)
             rule = self.config.event_rules.get(event_type)
             cache_key = None
-            if rule and rule.get('deduplicate'):
+            if rule and rule.get("deduplicate"):
                 cache_key = f"{commander_name}|{event_type}"
                 if api_key:
                     content_to_hash = filtered_event.copy()
                     content_to_hash.pop("timestamp", None)
                     content_to_hash.pop("event", None)
                     content_str = f"{commander_name}|{json.dumps(content_to_hash, sort_keys=True)}"
-                    event_hash = hashlib.sha256(content_str.encode('utf-8')).hexdigest()
+                    event_hash = hashlib.sha256(content_str.encode("utf-8")).hexdigest()
                     if self.hashes.get(cache_key) == event_hash:
                         logging.info(f"Skipping duplicate event for {commander_name}: {event_type}")
                         return
@@ -215,16 +219,16 @@ class Sender(threading.Thread):
 
     def _log_event_details(self, event):
         """Logs detailed information for specific events."""
-        event_type = event.get('event')
-        if event_type == 'Location':
-            docked_status = "Docked: True" if event.get('Docked', False) else "Docked: False"
+        event_type = event.get("event")
+        if event_type == "Location":
+            docked_status = "Docked: True" if event.get("Docked", False) else "Docked: False"
             logging.info(f"[>] Location: {event.get('StarSystem', 'N/A')} ({docked_status})")
-        elif event_type == 'Loadout':
-            jump_range = event.get('MaxJumpRange', 0)
+        elif event_type == "Loadout":
+            jump_range = event.get("MaxJumpRange", 0)
             logging.info(f"[>] Loadout: {event.get('Ship', 'N/A')} (Jump: {jump_range:.2f} ly)")
-        elif event_type == 'Materials':
-            raw_count = len(event.get('Raw', []))
-            encoded_count = len(event.get('Encoded', []))
+        elif event_type == "Materials":
+            raw_count = len(event.get("Raw", []))
+            encoded_count = len(event.get("Encoded", []))
             logging.info(f"[>] Materials: Updated (Raw: {raw_count}, Encoded: {encoded_count})")
         else:
             logging.info(f"Successfully sent event: {event_type}")
@@ -253,27 +257,27 @@ class Sender(threading.Thread):
             return (False, False)
 
         headers = {
-            'Content-Type': 'application/json',
-            'User-Agent': self.config.USER_AGENT,
-            'x-api-key': api_key,
-            'x-commander': cmdr_name
+            "Content-Type": "application/json",
+            "User-Agent": self.config.USER_AGENT,
+            "x-api-key": api_key,
+            "x-commander": cmdr_name,
         }
 
         try:
             response = requests.post(self.config.API_URL, headers=headers, json=event, timeout=10)
-            
+
             # --- 1. УСПЕШНАЯ ОТПРАВКА (200 OK) ---
             if response.status_code == 200:
                 self._log_event_details(event)
-                
+
                 # [НОВОЕ] Логика Желтого статуса
-                event_type = event.get('event')
-                if event_type == 'Shutdown':
+                event_type = event.get("event")
+                if event_type == "Shutdown":
                     logging.info("🛑 Game Shutdown detected. Switching to standby.")
-                    self.update_status('Waiting', 'Game closed. Waiting for Commander...')
+                    self.update_status("Waiting", "Game closed. Waiting for Commander...")
                 else:
-                    event_type = event.get('event', 'Event')
-                    self.update_status('Running', f'Event {event_type} sent')
+                    event_type = event.get("event", "Event")
+                    self.update_status("Running", f"Event {event_type} sent")
 
                 # Раз успех — убираем из черного списка
                 FAILED_ACCOUNTS.discard(cmdr_name)
@@ -283,19 +287,19 @@ class Sender(threading.Thread):
             elif response.status_code in [401, 403]:
                 logging.error(f"⛔ Auth failed for {cmdr_name} (Status: {response.status_code})")
                 FAILED_ACCOUNTS.add(cmdr_name)
-                self.update_status('Error', f'Auth Error {response.status_code} for {cmdr_name}')
+                self.update_status("Error", f"Auth Error {response.status_code} for {cmdr_name}")
                 return (False, False)
 
             # --- 3. ОШИБКА СЕРВЕРА — ставим в офлайн-очередь
             else:
                 logging.error(f"Failed to send event: {response.status_code} - {response.text}")
-                self.update_status('Error', 'Failed to send event, queuing.')
+                self.update_status("Error", "Failed to send event, queuing.")
                 return (False, True)
 
         # --- 4. ОШИБКА СЕТИ — ставим в офлайн-очередь
         except requests.RequestException as e:
             logging.error(f"Network error while sending event: {e}")
-            self.update_status('Error', 'Network error, queuing event.')
+            self.update_status("Error", "Network error, queuing event.")
             return (False, True)
 
     def retry_offline_queue(self):
@@ -310,7 +314,9 @@ class Sender(threading.Thread):
             else:
                 event, first_queued = item, time.time()
             if time.time() - first_queued > OFFLINE_QUEUE_TIMEOUT_SEC:
-                logging.warning(f"Dropping event {event.get('event', '?')} after {OFFLINE_QUEUE_TIMEOUT_SEC}s timeout.")
+                logging.warning(
+                    f"Dropping event {event.get('event', '?')} after {OFFLINE_QUEUE_TIMEOUT_SEC}s timeout."
+                )
                 continue
             success, queue_on_failure = self._send_to_api(event)
             if not success and queue_on_failure:
@@ -318,4 +324,4 @@ class Sender(threading.Thread):
             if self.offline_queue.qsize() > 0:
                 time.sleep(OFFLINE_RETRY_PAUSE_SEC)
             else:
-                self.update_status('Running', 'Offline queue cleared.')
+                self.update_status("Running", "Offline queue cleared.")

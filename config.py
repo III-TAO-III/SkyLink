@@ -1,10 +1,11 @@
-import os
-import sys
 import json
 import logging
-from pathlib import Path
-from dotenv import load_dotenv
+import os
+import sys
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
@@ -22,46 +23,50 @@ USER_AGENT = "SkyLink-Client/1.0"
 
 # --- Paths ---
 # User data is stored in AppData (Windows standard)
-APPDATA_DIR = Path(os.getenv('APPDATA')) / 'SkyLink'
-APPDATA_DIR.mkdir(parents=True, exist_ok=True) # Создаем папку
+APPDATA_DIR = Path(os.getenv("APPDATA")) / "SkyLink"
+APPDATA_DIR.mkdir(parents=True, exist_ok=True)  # Создаем папку
 
-ACCOUNTS_FILE = APPDATA_DIR / 'accounts.json'
-DISCOVERY_FILE = APPDATA_DIR / 'discovery.json'
-LOG_FILE = APPDATA_DIR / 'skylink_client.log' # <-- Новый файл для логов
+ACCOUNTS_FILE = APPDATA_DIR / "accounts.json"
+DISCOVERY_FILE = APPDATA_DIR / "discovery.json"
+LOG_FILE = APPDATA_DIR / "skylink_client.log"  # <-- Новый файл для логов
 
 # --- Configure Logging ---
 # Настраиваем логгер здесь, ПОСЛЕ создания путей.
 # Мы создаем список "хендлеров" — куда сливать информацию.
 log_handlers = [
-    logging.StreamHandler(sys.stdout) # 1. Консоль (как было раньше)
+    logging.StreamHandler(sys.stdout)  # 1. Консоль (как было раньше)
 ]
 
 # 2. Файл (добавляем всегда, чтобы и в Dev, и в EXE можно было почитать историю)
 try:
-    log_handlers.append(RotatingFileHandler(LOG_FILE, maxBytes=5*1024*1024, backupCount=2, encoding='utf-8'))
+    log_handlers.append(
+        RotatingFileHandler(LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=2, encoding="utf-8")
+    )
 except Exception as e:
     print(f"Warning: Could not set up file logging: {e}")
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=log_handlers # Применяем оба канала
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=log_handlers,  # Применяем оба канала
 )
 
 # --- Globals ---
 # Global session state (gameversion/build from LoadGame; star_system/star_pos for EDDN; DLC/travel flags for Technical Truth)
 CURRENT_SESSION = {
-    "commander": None, "api_key": None, "gameversion": "", "gamebuild": "",
-    "star_system": "", "star_pos": [],
-    "is_horizons": False, "is_odyssey": False, "is_taxi": False, "is_multicrew": False,
+    "commander": None,
+    "api_key": None,
+    "gameversion": "",
+    "gamebuild": "",
+    "star_system": "",
+    "star_pos": [],
+    "is_horizons": False,
+    "is_odyssey": False,
+    "is_taxi": False,
+    "is_multicrew": False,
 }
 # Global state for GUI (to avoid circular imports)
-UI_STATE = {
-    "status": "WAITING",
-    "color": "gray",
-    "commander": None,
-    "auth_required": False
-}
+UI_STATE = {"status": "WAITING", "color": "gray", "commander": None, "auth_required": False}
 
 # EDDN: event types that must be sent to EDDN even if events.json marks them "ignore" for portal
 EDDN_REQUIRED_EVENTS = frozenset({"Scan", "FSDJump", "SAASignalsFound", "FSSBodySignals"})
@@ -72,7 +77,7 @@ def get_resource_path(relative_path):
     Get the absolute path to a resource, works for both development and
     PyInstaller-packed executables.
     """
-    if hasattr(sys, '_MEIPASS'):
+    if hasattr(sys, "_MEIPASS"):
         # Running in a PyInstaller bundle
         base_path = sys._MEIPASS
     else:
@@ -86,13 +91,13 @@ class Config:
         self.app_data_dir = APPDATA_DIR
         self.accounts_file = ACCOUNTS_FILE
         self.discovery_file = DISCOVERY_FILE
-        
+
         self.event_rules = {}
         self.field_rules = {}
         self.accounts = {}
-        self.discovered_fields = {} # In-memory cache for new fields
-        self.default_action = 'send'
-        
+        self.discovered_fields = {}  # In-memory cache for new fields
+        self.default_action = "send"
+
         # Load configurations
         self.load_internal_rules()
         self.load_accounts()
@@ -102,7 +107,7 @@ class Config:
         self.API_URL = API_URL
         self.HEARTBEAT_URL = HEARTBEAT_URL
         self.USER_AGENT = USER_AGENT
-        
+
         # --- Journal Path Discovery ---
         self.journal_path = self.get_saved_games_path()
         if not self.journal_path:
@@ -117,17 +122,23 @@ class Config:
         """
         try:
             # Standard path
-            path = Path.home() / 'Saved Games' / 'Frontier Developments' / 'Elite Dangerous'
+            path = Path.home() / "Saved Games" / "Frontier Developments" / "Elite Dangerous"
             if path.exists():
                 return str(path)
 
             # Check OneDrive path
-            onedrive_path = Path.home() / 'OneDrive' / 'Saved Games' / 'Frontier Developments' / 'Elite Dangerous'
+            onedrive_path = (
+                Path.home()
+                / "OneDrive"
+                / "Saved Games"
+                / "Frontier Developments"
+                / "Elite Dangerous"
+            )
             if onedrive_path.exists():
                 return str(onedrive_path)
-                
+
             return None
-            
+
         except Exception as e:
             logging.error(f"Error detecting Saved Games path: {e}")
             return None
@@ -136,13 +147,15 @@ class Config:
         """Loads commander accounts from accounts.json."""
         logging.info(f"📂 Loading accounts from: {self.accounts_file}")
         if not self.accounts_file.exists():
-            logging.warning(f"⚠ Accounts file not found at {self.accounts_file}. Creating empty registry.")
+            logging.warning(
+                f"⚠ Accounts file not found at {self.accounts_file}. Creating empty registry."
+            )
             self._save_json(self.accounts_file, {"accounts": {}})
             self.accounts = {}
             return
 
         try:
-            with open(self.accounts_file, 'r', encoding='utf-8') as f:
+            with open(self.accounts_file, "r", encoding="utf-8") as f:
                 # Handle empty file case
                 content = f.read()
                 if not content:
@@ -170,7 +183,7 @@ class Config:
 
     def _save_json(self, filepath, data):
         try:
-            with open(filepath, 'w', encoding='utf-8') as f:
+            with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
         except IOError as e:
             logging.error(f"Failed to save JSON to {filepath}: {e}")
@@ -180,10 +193,10 @@ class Config:
         Loads event rules from the internal `events.json` file.
         This file is read-only and part of the application bundle.
         """
-        internal_events_path = get_resource_path('events.json')
+        internal_events_path = get_resource_path("events.json")
         logging.info(f"📂 Loading internal rules from: {internal_events_path}")
         try:
-            with open(internal_events_path, 'r', encoding='utf-8') as f:
+            with open(internal_events_path, "r", encoding="utf-8") as f:
                 config_data = json.load(f)
             self.flatten_event_rules(config_data)
         except FileNotFoundError:
@@ -200,15 +213,16 @@ class Config:
         self.event_rules = {}
         self.field_rules = {"filters": {}}
         self.default_action = config_data.get("settings", {}).get("default_action", "send")
-        
+
         for category, events in config_data.get("categories", {}).items():
             for event_name, rule in events.items():
                 self.event_rules[event_name] = {
                     "action": rule.get("action", "send"),
-                    "deduplicate": rule.get("deduplicate", False)
+                    "deduplicate": rule.get("deduplicate", False),
                 }
                 self.field_rules["filters"][event_name] = {
-                    key: value for key, value in rule.items()
+                    key: value
+                    for key, value in rule.items()
                     if key not in ["action", "deduplicate", "comment"]
                 }
 
@@ -216,7 +230,7 @@ class Config:
         """Loads the discovery log from discovery.json."""
         if self.discovery_file.exists():
             try:
-                with open(self.discovery_file, 'r', encoding='utf-8') as f:
+                with open(self.discovery_file, "r", encoding="utf-8") as f:
                     content = f.read()
                     if not content:
                         self.discovered_fields = {}
@@ -246,20 +260,22 @@ class Config:
         # Get the known fields for this event from the internal rules
         known_fields_with_metadata = self.field_rules.get("filters", {}).get(event_type, {})
         known_field_names = known_fields_with_metadata.keys()
-        
+
         # Get fields already discovered for this event
         if event_type not in self.discovered_fields:
             self.discovered_fields[event_type] = []
 
         discovered_in_session = self.discovered_fields[event_type]
-        
+
         updated = False
         for key in event_data.keys():
             # A field is new if it's not in the internal rules AND not already discovered
             if key not in known_field_names and key not in discovered_in_session:
                 self.discovered_fields[event_type].append(key)
                 updated = True
-                logging.info(f"✨ New field discovered for '{event_type}': {key}. Logged to discovery.json.")
-        
+                logging.info(
+                    f"✨ New field discovered for '{event_type}': {key}. Logged to discovery.json."
+                )
+
         if updated:
             self._save_json(self.discovery_file, self.discovered_fields)
