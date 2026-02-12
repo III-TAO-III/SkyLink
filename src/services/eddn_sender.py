@@ -8,10 +8,7 @@ import re
 from copy import deepcopy
 from typing import Any, Optional
 
-try:
-    import aiohttp
-except ImportError:
-    aiohttp = None
+import httpx
 
 EDDN_SCHEMA_REF = "https://eddn.edcd.io/schemas/journal/1"
 EDDN_SCHEMA_FSSBODYSIGNALS = "https://eddn.edcd.io/schemas/fssbodysignals/1"
@@ -217,10 +214,12 @@ def build_eddn_payload(event_data: dict, game_state: Optional[dict] = None) -> O
 
 
 async def send_to_eddn(
-    event_data: dict, game_state: Optional[dict] = None, timeout: float = EDDN_TIMEOUT_SEC
+    client: httpx.AsyncClient,
+    event_data: dict,
+    game_state: Optional[dict] = None,
+    timeout: float = EDDN_TIMEOUT_SEC,
 ) -> bool:
-    if aiohttp is None:
-        return False
+    """Send event to EDDN using the shared httpx.AsyncClient. Pass game_state=CURRENT_SESSION."""
     payload = build_eddn_payload(event_data, game_state)
 
     if payload is None:
@@ -229,17 +228,20 @@ async def send_to_eddn(
     logging.info(f"🚀 EDDN: Sending {event_data.get('event')}...")
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                EDDN_UPLOAD_URL, json=payload, timeout=aiohttp.ClientTimeout(total=timeout)
-            ) as resp:
-                if resp.status == 200:
-                    logging.info("✅ EDDN: Upload Success")
-                    return True
+        response = await client.post(
+            EDDN_UPLOAD_URL,
+            json=payload,
+            timeout=timeout,
+        )
+        if response.status_code == 200:
+            logging.info("✅ EDDN: Upload Success")
+            return True
 
-                err_text = await resp.text()
-                logging.warning(f"❌ EDDN: HTTP {resp.status} - {err_text}")
-                return False
+        logging.warning(f"❌ EDDN: HTTP {response.status_code} - {response.text}")
+        return False
+    except httpx.HTTPError as e:
+        logging.warning("⚠️ EDDN: Error %s", e)
+        return False
     except Exception as e:
-        logging.warning(f"⚠️ EDDN: Error {e}")
+        logging.exception("Unexpected error in EDDN send")
         return False

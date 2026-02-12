@@ -7,15 +7,15 @@ import queue
 import threading
 import time
 
-import requests
+import httpx
 
-from config import CURRENT_SESSION, EDDN_REQUIRED_EVENTS  # <-- ИСПОЛЬЗУЕМ ГЛОБАЛЬНЫЙ СПИСОК
+from config import CURRENT_SESSION, EDDN_REQUIRED_EVENTS
 from utils import filter_event_fields
 
 # Глобальный регистр ошибок авторизации (хранится в оперативной памяти)
 FAILED_ACCOUNTS = set()
 
-# Офлайн-очередь: таймаут жизни пакета и пауза между переотправками
+# Офлайн-очередь: таймаут жизни пакета и пауза между переотправками (используем time.time())
 OFFLINE_QUEUE_TIMEOUT_SEC = 120  # 2 минуты — затем пакет удаляется
 OFFLINE_RETRY_PAUSE_SEC = 10  # пауза между попытками отправки
 
@@ -149,21 +149,27 @@ class Sender(threading.Thread):
         self.event_queue.put(event)
 
     def run(self):
-        """Processes the event queue and sends data to the API."""
-        while not self.stop_event.is_set():
-            try:
-                event = self.event_queue.get(timeout=1)
-                self.process_event(event)
-            except queue.Empty:
-                self.retry_offline_queue()
-                continue
+        """Processes the event queue and sends data to the API via a dedicated asyncio event loop."""
+        asyncio.run(self._worker())
+
+    async def _worker(self):
+        """Async worker: single httpx.AsyncClient, read from queue.Queue via to_thread, process_event / retry_offline_queue."""
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            while not self.stop_event.is_set():
+                try:
+                    event = await asyncio.to_thread(self.event_queue.get, timeout=1)
+                except queue.Empty:
+                    await self.retry_offline_queue(client)
+                    continue
+                if event:
+                    await self.process_event(event, client)
 
     def stop(self):
         """Stops the sender thread."""
         self.stop_event.set()
 
-    def process_event(self, event):
-        """Processes a single event: routes to EDDN and/or Portal based on config."""
+    async def process_event(self, event, client):
+        """Processes a single event: routes to EDDN and/or Portal based on config. Preserves all logic."""
         send_to_portal = event.pop("_send_to_portal", False)
         event_type = event.get("event")
         if not event_type:
@@ -174,13 +180,15 @@ class Sender(threading.Thread):
             return
         # -------------------------------------------------
 
-        # --- EDDN dispatch (independent of Portal) ---
+        # --- EDDN dispatch (independent of Portal). Pass game_state=CURRENT_SESSION. ---
         eddn_ok = False
         if event_type in EDDN_REQUIRED_EVENTS:
             try:
                 from src.services.eddn_sender import send_to_eddn
 
-                eddn_ok = asyncio.run(send_to_eddn(event, game_state=CURRENT_SESSION))
+                eddn_ok = await send_to_eddn(
+                    client, event, game_state=CURRENT_SESSION
+                )
             except Exception as e:
                 logging.warning("EDDN send failed: %s", e)
                 eddn_ok = False
@@ -194,6 +202,7 @@ class Sender(threading.Thread):
             api_key = self._resolve_api_key(commander_name)
             rule = self.config.event_rules.get(event_type)
             cache_key = None
+            # Deduplication: preserve existing formula (commander_name + json.dumps sort_keys, hashlib.sha256)
             if rule and rule.get("deduplicate"):
                 cache_key = f"{commander_name}|{event_type}"
                 if api_key:
@@ -208,7 +217,7 @@ class Sender(threading.Thread):
                     self.hashes[cache_key] = event_hash
             if event_type in EDDN_REQUIRED_EVENTS:
                 filtered_event["eddnsent"] = eddn_ok
-            success, queue_on_failure = self._send_to_api(filtered_event)
+            success, queue_on_failure = await self._send_to_api(client, filtered_event)
             if not success and cache_key is not None and cache_key in self.hashes:
                 self.hashes.pop(cache_key)
                 self.save_hashes()
@@ -233,8 +242,8 @@ class Sender(threading.Thread):
         else:
             logging.info(f"Successfully sent event: {event_type}")
 
-    def _send_to_api(self, event):
-        """Sends a single event to the API. Returns (success, queue_on_failure)."""
+    async def _send_to_api(self, client, event):
+        """Sends a single event to the API. Returns (success, queue_on_failure). Preserves _log_event_details, update_status, FAILED_ACCOUNTS, Shutdown->Waiting."""
         cmdr_name = CURRENT_SESSION.get("commander") or "Unknown"
         api_key = CURRENT_SESSION.get("api_key")
 
@@ -247,7 +256,6 @@ class Sender(threading.Thread):
                 CURRENT_SESSION["api_key"] = api_key
                 logging.info(f"🔑 Key loaded from disk for: {cmdr_name}")
 
-        # 3. Если и теперь нет — сдаемся (не ставим в очередь)
         if not api_key:
             logging.warning(f"Cannot send event: No active API Key for commander {cmdr_name}")
             return (False, False)
@@ -264,13 +272,13 @@ class Sender(threading.Thread):
         }
 
         try:
-            response = requests.post(self.config.API_URL, headers=headers, json=event, timeout=10)
+            response = await client.post(
+                self.config.API_URL, headers=headers, json=event
+            )
 
             # --- 1. УСПЕШНАЯ ОТПРАВКА (200 OK) ---
             if response.status_code == 200:
                 self._log_event_details(event)
-
-                # [НОВОЕ] Логика Желтого статуса
                 event_type = event.get("event")
                 if event_type == "Shutdown":
                     logging.info("🛑 Game Shutdown detected. Switching to standby.")
@@ -278,35 +286,47 @@ class Sender(threading.Thread):
                 else:
                     event_type = event.get("event", "Event")
                     self.update_status("Running", f"Event {event_type} sent")
-
-                # Раз успех — убираем из черного списка
                 FAILED_ACCOUNTS.discard(cmdr_name)
                 return (True, False)
 
-            # --- 2. ОШИБКА АВТОРИЗАЦИИ (Красный) — в очередь не ставим
-            elif response.status_code in [401, 403]:
+            # --- 2. RATE LIMIT (429) — sleep Retry-After, then queue for later ---
+            if response.status_code == 429:
+                retry_after = 60
+                raw = response.headers.get("Retry-After")
+                if raw is not None:
+                    try:
+                        retry_after = int(raw)
+                    except ValueError:
+                        pass
+                logging.warning("⏳ Rate limited (429). Sleeping %s s (Retry-After).", retry_after)
+                await asyncio.sleep(retry_after)
+                return (False, True)
+
+            # --- 3. ОШИБКА АВТОРИЗАЦИИ (Красный) — в очередь не ставим ---
+            if response.status_code in [401, 403]:
                 logging.error(f"⛔ Auth failed for {cmdr_name} (Status: {response.status_code})")
                 FAILED_ACCOUNTS.add(cmdr_name)
                 self.update_status("Error", f"Auth Error {response.status_code} for {cmdr_name}")
                 return (False, False)
 
-            # --- 3. ОШИБКА СЕРВЕРА — ставим в офлайн-очередь
-            else:
-                logging.error(f"Failed to send event: {response.status_code} - {response.text}")
-                self.update_status("Error", "Failed to send event, queuing.")
-                return (False, True)
-
-        # --- 4. ОШИБКА СЕТИ — ставим в офлайн-очередь
-        except requests.RequestException as e:
-            logging.error(f"Network error while sending event: {e}")
-            self.update_status("Error", "Network error, queuing event.")
+            # --- 4. ОШИБКА СЕРВЕРА — ставим в офлайн-очередь ---
+            logging.error(f"Failed to send event: {response.status_code} - {response.text}")
+            self.update_status("Error", "Failed to send event, queuing.")
             return (False, True)
 
-    def retry_offline_queue(self):
-        """Tries to send events from the offline queue. Пакеты старше 2 минут удаляются."""
+        except (httpx.HTTPError, httpx.TimeoutException) as e:
+            logging.error("Network error while sending event: %s", e)
+            self.update_status("Error", "Network error, queuing event.")
+            return (False, True)
+        except Exception:
+            logging.exception("Unexpected error in _send_to_api")
+            return (False, True)
+
+    async def retry_offline_queue(self, client):
+        """Tries to send events from the offline queue. Uses time.time() and OFFLINE_QUEUE_TIMEOUT_SEC."""
         if self.offline_queue.empty():
             return
-        logging.info(f"Retrying {self.offline_queue.qsize()} events from the offline queue.")
+        logging.info("Retrying %s events from the offline queue.", self.offline_queue.qsize())
         while not self.offline_queue.empty():
             item = self.offline_queue.get()
             if isinstance(item, tuple):
@@ -315,13 +335,15 @@ class Sender(threading.Thread):
                 event, first_queued = item, time.time()
             if time.time() - first_queued > OFFLINE_QUEUE_TIMEOUT_SEC:
                 logging.warning(
-                    f"Dropping event {event.get('event', '?')} after {OFFLINE_QUEUE_TIMEOUT_SEC}s timeout."
+                    "Dropping event %s after %ss timeout.",
+                    event.get("event", "?"),
+                    OFFLINE_QUEUE_TIMEOUT_SEC,
                 )
                 continue
-            success, queue_on_failure = self._send_to_api(event)
+            success, queue_on_failure = await self._send_to_api(client, event)
             if not success and queue_on_failure:
                 self.offline_queue.put((event, first_queued))
             if self.offline_queue.qsize() > 0:
-                time.sleep(OFFLINE_RETRY_PAUSE_SEC)
+                await asyncio.sleep(OFFLINE_RETRY_PAUSE_SEC)
             else:
                 self.update_status("Running", "Offline queue cleared.")
