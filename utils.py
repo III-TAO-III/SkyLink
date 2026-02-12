@@ -2,7 +2,7 @@ import hashlib
 import json
 import logging
 
-import requests
+import httpx
 
 
 def calculate_hash(data, exclude_keys=None):
@@ -105,7 +105,7 @@ def verify_api_key(api_key, api_url):
     verify_url = f"{base_url}/verify"
 
     try:
-        response = requests.get(verify_url, headers={"x-api-key": api_key}, timeout=5)
+        response = httpx.get(verify_url, headers={"x-api-key": api_key}, timeout=5)
 
         if response.status_code == 200:
             data = response.json()

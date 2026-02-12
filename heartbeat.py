@@ -6,7 +6,7 @@ Runs in a dedicated daemon thread; does not block main UI or other services.
 import logging
 import threading
 
-import requests
+import httpx
 
 
 class HeartbeatService(threading.Thread):
@@ -38,7 +38,7 @@ class HeartbeatService(threading.Thread):
                         "x-commander": cmdr_name,
                         "User-Agent": self.config.USER_AGENT,
                     }
-                    response = requests.post(
+                    response = httpx.post(
                         self.config.HEARTBEAT_URL,
                         headers=headers,
                         timeout=5,
@@ -62,7 +62,7 @@ class HeartbeatService(threading.Thread):
                             response.status_code,
                             response.text[:100] if response.text else "",
                         )
-                except requests.RequestException as e:
+                except httpx.RequestError as e:
                     logging.warning("Heartbeat network error for %s: %s", cmdr_name, e)
 
             self._stop_event.wait(30)
