@@ -28,6 +28,7 @@ APPDATA_DIR.mkdir(parents=True, exist_ok=True)  # Создаем папку
 
 ACCOUNTS_FILE = APPDATA_DIR / "accounts.json"
 DISCOVERY_FILE = APPDATA_DIR / "discovery.json"
+SETTINGS_FILE = APPDATA_DIR / "settings.json"
 LOG_FILE = APPDATA_DIR / "skylink_client.log"  # <-- Новый файл для логов
 
 # --- Configure Logging ---
@@ -91,6 +92,10 @@ class Config:
         self.app_data_dir = APPDATA_DIR
         self.accounts_file = ACCOUNTS_FILE
         self.discovery_file = DISCOVERY_FILE
+        self.settings_file = SETTINGS_FILE
+
+        self.disclaimer_accepted = False
+        self.language = "en"
 
         self.event_rules = {}
         self.field_rules = {}
@@ -102,6 +107,7 @@ class Config:
         self.load_internal_rules()
         self.load_accounts()
         self.load_discovered_fields()
+        self.load_settings()
 
         # --- Expose env vars through the instance ---
         self.API_URL = API_URL
@@ -114,6 +120,44 @@ class Config:
             logging.error("Could not find Elite Dangerous journal directory.")
         else:
             logging.info(f"📂 Journal directory detected: {self.journal_path}")
+
+    def load_settings(self):
+        """Load disclaimer_accepted and language from settings.json. Preserve defaults if file missing."""
+        if not self.settings_file.exists():
+            return
+        try:
+            with open(self.settings_file, "r", encoding="utf-8") as f:
+                content = f.read()
+                if not content:
+                    return
+                data = json.loads(content)
+            self.disclaimer_accepted = data.get("disclaimer_accepted", False)
+            self.language = data.get("language", "en")
+        except (IOError, json.JSONDecodeError) as e:
+            logging.warning("Could not load settings: %s", e)
+
+    def set_setting(self, key, value):
+        """Update a single key in settings.json. Merge with existing content; do not overwrite other keys."""
+        data = {}
+        if self.settings_file.exists():
+            try:
+                with open(self.settings_file, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    if content:
+                        data = json.loads(content)
+            except (IOError, json.JSONDecodeError):
+                pass
+        data[key] = value
+        try:
+            with open(self.settings_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except IOError as e:
+            logging.warning("Could not save setting %s: %s", key, e)
+
+    def save_disclaimer_state(self):
+        """Persist disclaimer_accepted and language to settings.json (merge, do not overwrite other keys)."""
+        self.set_setting("disclaimer_accepted", self.disclaimer_accepted)
+        self.set_setting("language", self.language)
 
     def get_saved_games_path(self):
         """

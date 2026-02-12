@@ -399,6 +399,10 @@ class SkyLinkGUI(ctk.CTk):
         self.create_footer()  # Footer второй!
         self.create_body()  # Body третий!
 
+        # 3.5. First-run disclaimer (before starting tray and loops)
+        if not self.config.disclaimer_accepted:
+            self.show_disclaimer_modal()
+
         # 4. Запуск процессов
         self.start_tray_icon()
         self.update_ui_loop()
@@ -529,11 +533,7 @@ class SkyLinkGUI(ctk.CTk):
         return False
 
     def _save_start_minimized_setting(self, value):
-        try:
-            with open(self._settings_path(), "w", encoding="utf-8") as f:
-                json.dump({"start_minimized": bool(value)}, f, indent=2)
-        except Exception as e:
-            logging.warning("Could not save start_minimized setting: %s", e)
+        self.config.set_setting("start_minimized", bool(value))
 
     def _on_start_minimized_changed(self):
         self._save_start_minimized_setting(self._start_minimized_var.get())
@@ -685,6 +685,125 @@ class SkyLinkGUI(ctk.CTk):
         self.destroy()
         # Принудительный выход, чтобы убить все daemon-потоки
         sys.exit(0)
+
+    # --- First-run disclaimer modal (EN/RU) ---
+    _DISCLAIMER_EN = {
+        "title": "SkyLink Privacy & Data Policy",
+        "body": """ATTENTION: Data Transmission Policy
+
+This application automatically synchronizes your game data with two systems:
+
+1. EDDN (Elite Dangerous Data Network) - Global Public Network:
+   - Sent: Star coordinates, planet scan data, signals, FSD jumps.
+   - Purpose: Updating public databases (Inara, Spansh, EDSM).
+   - Privacy: Commander name is anonymized/hashed by the network protocol. Personal data is NOT sent.
+
+2. SkyBioML Portal - Private Squadron Server:
+   - Sent: Ship status, loadouts, cargo, location, credits.
+   - Purpose: Squadron management tools and analytics.
+   - Privacy: Data is accessible only to authorized squadron members.
+
+By using SkyLink, you explicitly consent to the automated transmission of navigation and exploration data to these networks.""",
+        "accept": "I Accept & Continue",
+        "decline": "Decline & Exit",
+    }
+    _DISCLAIMER_RU = {
+        "title": "Политика конфиденциальности SkyLink",
+        "body": """ВНИМАНИЕ: Политика передачи данных
+
+Это приложение автоматически синхронизирует ваши данные с двумя системами:
+
+1. Глобальная сеть EDDN (Elite Dangerous Data Network):
+   - Отправляются: Координаты звезд, данные сканирования планет, сигналы.
+   - Цель: Обновление общедоступных баз (Inara, Spansh, EDSM).
+   - Приватность: Имя пилота анонимизируется протоколом. Личные данные НЕ отправляются.
+
+2. Портал SkyBioML (Приватный сервер):
+   - Отправляются: Статус корабля, фиты, груз, местоположение.
+   - Цель: Работа инструментов эскадрильи.
+   - Приватность: Данные доступны только авторизованным членам эскадрильи.
+
+Используя SkyLink, вы подтверждаете согласие на автоматическую отправку навигационных и исследовательских данных.""",
+        "accept": "Принимаю и Продолжить",
+        "decline": "Отказаться и Выйти",
+    }
+
+    def show_disclaimer_modal(self):
+        """Modal: Privacy disclaimer. EN/RU toggle. Accept -> save and continue; Decline -> quit_app()."""
+        modal = ctk.CTkToplevel(self)
+        modal.title("SkyLink Privacy & Data Policy")
+        modal.geometry("560x420")
+        modal.configure(fg_color=COLOR_BORDER)
+        modal.resizable(True, True)
+        modal.transient(self)
+        modal.protocol("WM_DELETE_WINDOW", self.quit_app)
+
+        # Top: title + language switch
+        top_frame = ctk.CTkFrame(modal, fg_color=COLOR_BG, corner_radius=0)
+        top_frame.pack(side="top", fill="x", padx=1, pady=(1, 0))
+        title_label = ctk.CTkLabel(
+            top_frame, text=self._DISCLAIMER_EN["title"], font=("PLAY", 12, "bold"), text_color=COLOR_TEXT_WHITE
+        )
+        title_label.pack(side="left", padx=15, pady=10)
+
+        def current_content():
+            return self._DISCLAIMER_RU if self.config.language == "ru" else self._DISCLAIMER_EN
+
+        def apply_content():
+            c = current_content()
+            title_label.configure(text=c["title"])
+            textbox.configure(state="normal")
+            textbox.delete("1.0", "end")
+            textbox.insert("1.0", c["body"])
+            textbox.configure(state="disabled")
+            btn_accept.configure(text=c["accept"])
+            btn_decline.configure(text=c["decline"])
+            lang_btn.configure(text="RU" if self.config.language == "en" else "EN")
+
+        def toggle_lang():
+            self.config.language = "ru" if self.config.language == "en" else "en"
+            apply_content()
+
+        lang_btn = ctk.CTkButton(
+            top_frame, text="RU", width=50, height=28, fg_color="#3f3f46", command=toggle_lang
+        )
+        lang_btn.pack(side="right", padx=15, pady=8)
+
+        # Middle: scrollable read-only text
+        mid_frame = ctk.CTkFrame(modal, fg_color=COLOR_BG, corner_radius=0)
+        mid_frame.pack(side="top", fill="both", expand=True, padx=1, pady=0)
+        textbox = ctk.CTkTextbox(mid_frame, wrap="word", state="disabled", font=("PLAY", 11), fg_color="#0a0a0f")
+        textbox.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Bottom: Accept (green) / Decline (red)
+        bot_frame = ctk.CTkFrame(modal, fg_color=COLOR_BG, corner_radius=0)
+        bot_frame.pack(side="bottom", fill="x", padx=1, pady=(0, 1))
+        btn_frame = ctk.CTkFrame(bot_frame, fg_color="transparent")
+        btn_frame.pack(pady=15, padx=15)
+
+        def on_accept():
+            self.config.disclaimer_accepted = True
+            self.config.save_disclaimer_state()
+            modal.destroy()
+
+        def on_decline():
+            modal.destroy()
+            self.quit_app()
+
+        btn_accept = ctk.CTkButton(
+            btn_frame, text=self._DISCLAIMER_EN["accept"], fg_color=COLOR_GREEN, hover_color="#16a34a", command=on_accept
+        )
+        btn_accept.pack(side="left", padx=(0, 10))
+        btn_decline = ctk.CTkButton(
+            btn_frame, text=self._DISCLAIMER_EN["decline"], fg_color=COLOR_RED, hover_color="#dc2626", command=on_decline
+        )
+        btn_decline.pack(side="left")
+
+        apply_content()
+
+        modal.update()
+        modal.grab_set()
+        self.wait_window(modal)
 
     # --- Animation & Loop ---
     def update_ui_loop(self):
