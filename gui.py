@@ -18,6 +18,7 @@ from tendo import singleton
 from config import CURRENT_SESSION, UI_STATE, Config
 from main import start_background_service, stop_background_service
 from sender import FAILED_ACCOUNTS, Sender
+from updater import UpdateManager
 from utils import verify_api_key
 
 # --- Theme Setup ---
@@ -408,6 +409,11 @@ class SkyLinkGUI(ctk.CTk):
         self.update_ui_loop()
         self.refresh_account_list()
 
+        self.updater = UpdateManager(self.config)
+        self._update_info = None
+        self._update_info_clicked = None
+        threading.Thread(target=self._check_for_updates_worker, daemon=True).start()
+
         # 5. Start minimized: скрыть окно до первого кадра, чтобы не мелькало
         if self._load_start_minimized_setting():
             self.withdraw()
@@ -514,6 +520,19 @@ class SkyLinkGUI(ctk.CTk):
         )
         self.chk_run_at_startup.pack(side="left", padx=(15, 0))
 
+        self.btn_update = ctk.CTkButton(
+            self.footer,
+            text="",
+            font=("PLAY", 11),
+            fg_color=COLOR_GREEN,
+            hover_color="#16a34a",
+            width=140,
+            height=28,
+            command=self._on_update_click,
+        )
+        self.btn_update.pack(side="right", padx=(5, 0))
+        self.btn_update.pack_forget()  # hidden by default
+
         self.lbl_footer_status = ctk.CTkLabel(
             self.footer, text="Initializing...", text_color=COLOR_TEXT_GRAY, font=("PLAY", 11)
         )
@@ -546,6 +565,53 @@ class SkyLinkGUI(ctk.CTk):
         else:
             if not remove_app_from_startup():
                 self._run_at_startup_var.set(True)
+
+    def _check_for_updates_worker(self):
+        """Runs in daemon thread. On update found (and frozen EXE), schedule UI update on main thread."""
+        try:
+            result = self.updater.check_for_updates()
+            if result and getattr(sys, "frozen", False):
+                self.after(0, lambda: self._show_update_button(result))
+        except Exception as e:
+            logging.debug("Update check error: %s", e)
+
+    def _show_update_button(self, update_info):
+        """Called on main thread. Show update button with version."""
+        self._update_info = update_info
+        self.btn_update.configure(text=f"⬇ Install v{update_info['version']}")
+        self.btn_update.pack(side="right", padx=(5, 0))
+
+    def _on_update_click(self):
+        """Disable button, start download in background thread."""
+        self._update_info_clicked = self._update_info or getattr(
+            self, "_update_info_clicked", None
+        )
+        self._update_info = None
+        if not self._update_info_clicked:
+            return
+        self.btn_update.configure(state="disabled", text="Downloading...")
+        threading.Thread(target=self._download_update_worker, daemon=True).start()
+
+    def _download_update_worker(self):
+        """Runs in background thread. On success schedule run_installer_and_exit on main thread."""
+        try:
+            url = self.updater.find_installer_url(self._update_info_clicked.get("assets") or [])
+            if not url:
+                self.after(0, self._on_update_download_failed)
+                return
+            path = self.updater.download_installer(url)
+            self.after(0, lambda: self.updater.run_installer_and_exit(path))
+        except Exception as e:
+            logging.warning("Update download failed: %s", e)
+            self.after(0, self._on_update_download_failed)
+
+    def _on_update_download_failed(self):
+        """Reset update button on main thread after failed download."""
+        if not self.winfo_exists():
+            return
+        info = getattr(self, "_update_info_clicked", None)
+        version = info.get("version", "?") if info else "?"
+        self.btn_update.configure(state="normal", text=f"⬇ Install v{version}")
 
     def create_body(self):
         self.body_frame = ctk.CTkFrame(self.inner_frame, fg_color="transparent")

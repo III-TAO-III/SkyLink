@@ -19,7 +19,9 @@ DEFAULT_HEARTBEAT_URL = "https://skybioml.net/api/system/skylinkbeat"
 API_URL = os.getenv("SKYLINK_API_URL", DEFAULT_API_URL)
 HEARTBEAT_URL = os.getenv("SKYLINK_HEARTBEAT_URL", DEFAULT_HEARTBEAT_URL)
 
-USER_AGENT = "SkyLink-Client/1.0"
+SOFTWARE_VERSION = "0.9.0"
+GITHUB_REPO = "III-TAO-III/SkyLink"
+USER_AGENT = f"SkyLink-Client/{SOFTWARE_VERSION}"
 
 # --- Paths ---
 # User data is stored in AppData (Windows standard)
@@ -51,6 +53,10 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=log_handlers,  # Применяем оба канала
 )
+
+# Не засорять консоль логами каждого HTTP-запроса (heartbeat, API, EDDN)
+for _logger_name in ("httpx", "httpcore"):
+    logging.getLogger(_logger_name).setLevel(logging.WARNING)
 
 # --- Globals ---
 # Global session state (gameversion/build from LoadGame; star_system/star_pos for EDDN; DLC/travel flags for Technical Truth)
@@ -109,10 +115,12 @@ class Config:
         self.load_discovered_fields()
         self.load_settings()
 
-        # --- Expose env vars through the instance ---
+        # --- Expose env vars and version through the instance ---
         self.API_URL = API_URL
         self.HEARTBEAT_URL = HEARTBEAT_URL
         self.USER_AGENT = USER_AGENT
+        self.SOFTWARE_VERSION = SOFTWARE_VERSION
+        self.GITHUB_REPO = GITHUB_REPO
 
         # --- Journal Path Discovery ---
         self.journal_path = self.get_saved_games_path()

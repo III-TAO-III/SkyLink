@@ -10,13 +10,18 @@ import httpx
 
 
 class HeartbeatService(threading.Thread):
-    """Sends POST to HEARTBEAT_URL every 30 seconds for each account. Silent fail on errors."""
+    """Sends POST to HEARTBEAT_URL every 30 seconds for each account. Logs only on state change."""
+
+    # Состояние по аккаунту: "ok" | "auth_failed" | "http_failed" | "network_failed"
+    _STATE_OK = "ok"
 
     def __init__(self, config, failed_accounts_ref):
         super().__init__(daemon=True)
         self.config = config
         self.failed_accounts = failed_accounts_ref  # reference to sender.FAILED_ACCOUNTS
         self._stop_event = threading.Event()
+        self._account_state = {}  # cmdr_name -> last state (ok / auth_failed / ...)
+        self._startup_logged = False  # одно сообщение об успешном старте
 
     def stop(self):
         """Signal the thread to exit on next wait()."""
@@ -29,9 +34,11 @@ class HeartbeatService(threading.Thread):
                 self._stop_event.wait(30)
                 continue
 
+            all_ok_this_round = True
             for cmdr_name, api_key in self.config.accounts.items():
                 if self._stop_event.is_set():
                     break
+                prev = self._account_state.get(cmdr_name)
                 try:
                     headers = {
                         "x-api-key": api_key,
@@ -44,25 +51,39 @@ class HeartbeatService(threading.Thread):
                         timeout=5,
                     )
                     if response.status_code == 200:
-                        self.failed_accounts.discard(
-                            cmdr_name
-                        )  # успешный beat — снимаем INVALID в UI
-                        logging.debug("Heartbeat OK for %s", cmdr_name)
+                        self.failed_accounts.discard(cmdr_name)
+                        self._account_state[cmdr_name] = self._STATE_OK
+                        if prev is not None and prev != self._STATE_OK:
+                            logging.info("💓 Heartbeat restored for %s", cmdr_name)
                     elif response.status_code in (401, 403):
+                        all_ok_this_round = False
                         self.failed_accounts.add(cmdr_name)
-                        logging.warning(
-                            "Heartbeat auth failed for %s: %s",
-                            cmdr_name,
-                            response.status_code,
-                        )
+                        if prev != "auth_failed":
+                            logging.warning(
+                                "Heartbeat auth failed for %s: %s",
+                                cmdr_name,
+                                response.status_code,
+                            )
+                            self._account_state[cmdr_name] = "auth_failed"
                     else:
-                        logging.warning(
-                            "Heartbeat failed for %s: %s %s",
-                            cmdr_name,
-                            response.status_code,
-                            response.text[:100] if response.text else "",
-                        )
+                        all_ok_this_round = False
+                        if prev != "http_failed":
+                            logging.warning(
+                                "Heartbeat failed for %s: %s %s",
+                                cmdr_name,
+                                response.status_code,
+                                response.text[:100] if response.text else "",
+                            )
+                            self._account_state[cmdr_name] = "http_failed"
                 except httpx.RequestError as e:
-                    logging.warning("Heartbeat network error for %s: %s", cmdr_name, e)
+                    all_ok_this_round = False
+                    if prev != "network_failed":
+                        logging.warning("Heartbeat network error for %s: %s", cmdr_name, e)
+                        self._account_state[cmdr_name] = "network_failed"
+
+            if all_ok_this_round and self.config.accounts and not self._startup_logged:
+                n = len(self.config.accounts)
+                logging.info("💓 Heartbeat: running for %s account(s)", n)
+                self._startup_logged = True
 
             self._stop_event.wait(30)

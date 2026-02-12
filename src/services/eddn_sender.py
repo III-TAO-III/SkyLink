@@ -10,12 +10,13 @@ from typing import Any, Optional
 
 import httpx
 
+from config import SOFTWARE_VERSION
+
 EDDN_SCHEMA_REF = "https://eddn.edcd.io/schemas/journal/1"
 EDDN_SCHEMA_FSSBODYSIGNALS = "https://eddn.edcd.io/schemas/fssbodysignals/1"
 EDDN_UPLOAD_URL = "https://eddn.edcd.io:4430/upload/"
 EDDN_TIMEOUT_SEC = 8
 SOFTWARE_NAME = "skybioml.net"
-SOFTWARE_VERSION = "1.4.0"
 
 # БЕЛЫЙ СПИСОК ПОЛЕЙ (согласно схеме journal/1)
 ALLOWED_FIELDS = {
