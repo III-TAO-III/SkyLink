@@ -33,6 +33,7 @@ deduplication_cache.json
 Thumbs.db
 .vscode/
 .idea/
+.ruff.toml
 
 # --- Local / personal ---
 start.md
