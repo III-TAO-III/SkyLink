@@ -578,7 +578,7 @@ class SkyLinkGUI(ctk.CTk):
     def _show_update_button(self, update_info):
         """Called on main thread. Show update button with version."""
         self._update_info = update_info
-        self.btn_update.configure(text=f"⬇ Install v{update_info['version']}")
+        self.btn_update.configure(text=f"⬇ Install {update_info['version']}")
         self.btn_update.pack(side="right", padx=(5, 0))
 
     def _on_update_click(self):
@@ -611,7 +611,7 @@ class SkyLinkGUI(ctk.CTk):
             return
         info = getattr(self, "_update_info_clicked", None)
         version = info.get("version", "?") if info else "?"
-        self.btn_update.configure(state="normal", text=f"⬇ Install v{version}")
+        self.btn_update.configure(state="normal", text=f"⬇ Install {version}")
 
     def create_body(self):
         self.body_frame = ctk.CTkFrame(self.inner_frame, fg_color="transparent")
