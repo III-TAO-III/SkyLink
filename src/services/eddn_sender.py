@@ -3,6 +3,7 @@ EDDN (Elite Dangerous Data Network) sender module.
 Strictly filters fields to match EDDN journal/1 schema.
 """
 
+import json
 import logging
 import re
 from copy import deepcopy
@@ -38,6 +39,12 @@ ALLOWED_FIELDS = {
         "Factions",
         "SystemFaction",
         "SystemState",
+        "Powers",
+        "PowerplayState",
+        "ControllingPower",
+        "PowerplayStateControlProgress",
+        "PowerplayStateReinforcement",
+        "PowerplayStateUndermining",
         "horizons",
         "odyssey",
         "Taxi",
@@ -157,6 +164,53 @@ def _normalize_flags(message: dict) -> dict:
     return out
 
 
+# Keys allowed inside each Factions[] item (EDDN disallows MyReputation, SquadronFaction, etc.)
+FACTIONS_ALLOWED_KEYS = frozenset(
+    {
+        "Name",
+        "FactionState",
+        "Government",
+        "Influence",
+        "Allegiance",
+        "Happiness",
+        "ActiveStates",
+        "PendingStates",
+        "RecoveringStates",
+    }
+)
+
+
+def _clean_message_for_eddn(msg: dict) -> None:
+    """Apply EDDN-specific cleaning to message in place. Call before _filter_fields_by_schema."""
+    # --- Factions: keep only schema-allowed keys per item ---
+    factions = msg.get("Factions")
+    if isinstance(factions, list):
+        msg["Factions"] = [
+            {k: v for k, v in item.items() if k in FACTIONS_ALLOWED_KEYS}
+            for item in factions
+            if isinstance(item, dict)
+        ]
+
+    # --- SystemFaction: keep only Name ---
+    system_faction = msg.get("SystemFaction")
+    if isinstance(system_faction, dict) and "Name" in system_faction:
+        msg["SystemFaction"] = {"Name": system_faction["Name"]}
+    elif isinstance(system_faction, dict):
+        msg["SystemFaction"] = {}
+
+    # --- Composition: normalize 0..1 to 0..100 if all values in [0, 1] ---
+    composition = msg.get("Composition")
+    if isinstance(composition, dict):
+        values = [v for v in composition.values() if isinstance(v, (int, float))]
+        if values and all(0 <= v <= 1 for v in values):
+            msg["Composition"] = {
+                k: (v * 100 if isinstance(v, (int, float)) and 0 <= v <= 1 else v)
+                for k, v in composition.items()
+            }
+    # Materials and AtmosphereComposition: leave as arrays; *_Localised already stripped at start
+    # (no conversion to dict; schema expects array of objects)
+
+
 def build_eddn_payload(event_data: dict, game_state: Optional[dict] = None) -> Optional[dict]:
     game_state = game_state or {}
     uploader_id = game_state.get("commander") or "Unknown_Commander"
@@ -193,6 +247,7 @@ def build_eddn_payload(event_data: dict, game_state: Optional[dict] = None) -> O
             # logging.warning(f"⚠️ EDDN: Missing StarPos for {msg.get('event')}. Skipping.")
             return None
 
+    _clean_message_for_eddn(msg)
     msg = _filter_fields_by_schema(msg)
 
     if "timestamp" in msg:
@@ -227,6 +282,10 @@ async def send_to_eddn(
         return False  # Пакет не прошел валидацию (нет координат)
 
     logging.info(f"🚀 EDDN: Sending {event_data.get('event')}...")
+
+    #print("\n--- [DEBUG] OUTGOING EDDN PAYLOAD START ---")
+    #print(json.dumps(payload, indent=2, ensure_ascii=False))
+    #print("--- [DEBUG] OUTGOING EDDN PAYLOAD END ---\n")
 
     try:
         response = await client.post(
