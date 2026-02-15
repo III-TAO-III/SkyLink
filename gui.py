@@ -368,6 +368,8 @@ class SkyLinkGUI(ctk.CTk):
         self.tray_icon = None
         self.last_tray_color = None
         self.pulse_phase = 0.0
+        self._current_view = None
+        self._service_started = False
 
         # 1. Настройка окна
         self.overrideredirect(True)
@@ -397,26 +399,26 @@ class SkyLinkGUI(ctk.CTk):
         self.inner_frame.pack(expand=True, fill="both", padx=1, pady=(1, 4))
 
         self.create_header()
-        self.create_footer()  # Footer второй!
-        self.create_body()  # Body третий!
+        self.create_footer()
+        self.create_body()
 
-        # 3.5. First-run disclaimer (before starting tray and loops)
-        if not self.config.disclaimer_accepted:
-            self.show_disclaimer_modal()
+        if self.config.last_accepted_version != self.config.SOFTWARE_VERSION:
+            self._draw_disclaimer_view()
+        else:
+            self._draw_main_view()
 
-        # 4. Запуск процессов
         self.start_tray_icon()
         self.update_ui_loop()
-        self.refresh_account_list()
-
         self.updater = UpdateManager(self.config)
         self._update_info = None
         self._update_info_clicked = None
         threading.Thread(target=self._check_for_updates_worker, daemon=True).start()
 
-        # 5. Start minimized: скрыть окно до первого кадра, чтобы не мелькало
-        if self._load_start_minimized_setting():
+        # 5. Start minimized only when MAIN view; otherwise show window so user can act (Disclaimer/Update)
+        if self._load_start_minimized_setting() and self._current_view == "MAIN":
             self.withdraw()
+        else:
+            self.show_window()
 
     def on_window_map(self, event):
         """Событие срабатывает, когда окно реально отрисовано ОС."""
@@ -531,7 +533,7 @@ class SkyLinkGUI(ctk.CTk):
             command=self._on_update_click,
         )
         self.btn_update.pack(side="right", padx=(5, 0))
-        self.btn_update.pack_forget()  # hidden by default
+        self.btn_update.pack_forget()  # hidden by default (optional show when update in MAIN view)
 
         self.lbl_footer_status = ctk.CTkLabel(
             self.footer, text="Initializing...", text_color=COLOR_TEXT_GRAY, font=("PLAY", 11)
@@ -567,11 +569,11 @@ class SkyLinkGUI(ctk.CTk):
                 self._run_at_startup_var.set(True)
 
     def _check_for_updates_worker(self):
-        """Runs in daemon thread. On update found (and frozen EXE), schedule UI update on main thread."""
+        """Runs in daemon thread. On update found (and frozen EXE), switch to update view on main thread."""
         try:
             result = self.updater.check_for_updates()
             if result and getattr(sys, "frozen", False):
-                self.after(0, lambda: self._show_update_button(result))
+                self.after(0, lambda r=result: (self._clear_body(), self._draw_update_view(r)))
         except Exception as e:
             logging.debug("Update check error: %s", e)
 
@@ -582,14 +584,17 @@ class SkyLinkGUI(ctk.CTk):
         self.btn_update.pack(side="right", padx=(5, 0))
 
     def _on_update_click(self):
-        """Disable button, start download in background thread."""
+        """Disable install button (footer or update-view), start download in background thread."""
         self._update_info_clicked = self._update_info or getattr(
             self, "_update_info_clicked", None
         )
         self._update_info = None
         if not self._update_info_clicked:
             return
-        self.btn_update.configure(state="disabled", text="Downloading...")
+        if self._current_view == "UPDATE" and getattr(self, "_update_install_btn", None) and self._update_install_btn.winfo_exists():
+            self._update_install_btn.configure(state="disabled", text="Downloading...")
+        elif getattr(self, "btn_update", None) and self.btn_update.winfo_exists():
+            self.btn_update.configure(state="disabled", text="Downloading...")
         threading.Thread(target=self._download_update_worker, daemon=True).start()
 
     def _download_update_worker(self):
@@ -606,16 +611,31 @@ class SkyLinkGUI(ctk.CTk):
             self.after(0, self._on_update_download_failed)
 
     def _on_update_download_failed(self):
-        """Reset update button on main thread after failed download."""
+        """Reset install button on main thread after failed download."""
         if not self.winfo_exists():
             return
+        self.show_window()
         info = getattr(self, "_update_info_clicked", None)
         version = info.get("version", "?") if info else "?"
-        self.btn_update.configure(state="normal", text=f"⬇ Install {version}")
+        if self._current_view == "UPDATE" and getattr(self, "_update_install_btn", None) and self._update_install_btn.winfo_exists():
+            self._update_install_btn.configure(state="normal", text=f"INSTALL {version}")
+        elif getattr(self, "btn_update", None) and self.btn_update.winfo_exists():
+            self.btn_update.configure(state="normal", text=f"⬇ Install {version}")
+
+    def _clear_body(self):
+        """Destroy all children of body_frame (keeps body_frame itself)."""
+        for widget in self.body_frame.winfo_children():
+            widget.destroy()
 
     def create_body(self):
+        """Create only the empty body_frame. Content is drawn by _draw_*_view()."""
         self.body_frame = ctk.CTkFrame(self.inner_frame, fg_color="transparent")
         self.body_frame.pack(side="top", fill="both", expand=True, padx=5, pady=5)
+
+    def _draw_main_view(self):
+        """Draw main app view: Active Commander, Registered Accounts, scroll list. Start background service if needed."""
+        self._current_view = "MAIN"
+        self._clear_body()
 
         # 1. Active Commander Block
         self.active_frame = ctk.CTkFrame(self.body_frame, fg_color="transparent")
@@ -632,15 +652,13 @@ class SkyLinkGUI(ctk.CTk):
         pilot_row.pack(fill="x", pady=(0, 5))
         pilot_row.grid_columnconfigure(1, weight=1)
 
-        # Имя пилота слева
         self.lbl_commander = ctk.CTkLabel(
             pilot_row, text="WAITING...", font=("PLAY", 20, "bold"), text_color=COLOR_TEXT_WHITE
         )
         self.lbl_commander.grid(row=0, column=0, sticky="w")
 
-        # Внутреннее окно для полного статуса: ширина под 33 символа, прозрачное; при длинном тексте — бегущая строка
         main_width = 640
-        status_win_width = int(main_width * 0.4 * 33 / 22)  # под 33 символа (~384)
+        status_win_width = int(main_width * 0.4 * 33 / 22)
         status_win_height = 28
         self._marquee_visible_chars = 33
         self._marquee_offset = 0
@@ -660,27 +678,19 @@ class SkyLinkGUI(ctk.CTk):
         )
         self.lbl_full_status.place(relx=1, rely=0.5, anchor="e", x=-8)
 
-        # 2. Section Header with Line (Решение твоей проблемы)
-        # Создаем контейнер для заголовка
+        # 2. Section Header with Line
         header_row = ctk.CTkFrame(self.body_frame, fg_color="transparent")
-        header_row.pack(
-            fill="x", padx=10, pady=(15, 5)
-        )  # pady=15 дает отступ сверху, отделяя от Active Commander
+        header_row.pack(fill="x", padx=10, pady=(15, 5))
 
-        # Текст
-        lbl = ctk.CTkLabel(
+        ctk.CTkLabel(
             header_row,
             text="REGISTERED ACCOUNTS",
             text_color=COLOR_TEXT_GRAY,
             font=("PLAY", 10, "bold"),
-        )
-        lbl.pack(side="left")
+        ).pack(side="left")
 
-        # Линия справа от текста
         line = ctk.CTkFrame(header_row, height=2, fg_color="#333333", corner_radius=0)
-        line.pack(
-            side="left", fill="x", expand=True, padx=(15, 0), pady=(5, 0)
-        )  # pady выравнивает линию по центру текста
+        line.pack(side="left", fill="x", expand=True, padx=(15, 0), pady=(5, 0))
 
         # 3. Scroll List
         self.scroll_frame = ctk.CTkScrollableFrame(
@@ -690,6 +700,115 @@ class SkyLinkGUI(ctk.CTk):
             scrollbar_button_hover_color="#333333",
         )
         self.scroll_frame.pack(fill="both", expand=True, padx=0, pady=5)
+
+        self.refresh_account_list()
+        if not self._service_started:
+            threading.Thread(target=start_background_service, args=(self.config,), daemon=True).start()
+            self._service_started = True
+
+    def _draw_disclaimer_view(self):
+        """Draw disclaimer view: title, EN/RU text, Lang toggle, Accept and Exit. On Accept -> save version, then main view."""
+        self._current_view = "DISCLAIMER"
+        self._clear_body()
+
+        def current_content():
+            return self._DISCLAIMER_RU if self.config.language == "ru" else self._DISCLAIMER_EN
+
+        top_frame = ctk.CTkFrame(self.body_frame, fg_color=COLOR_BG, corner_radius=0)
+        top_frame.pack(side="top", fill="x", padx=1, pady=(1, 0))
+        title_label = ctk.CTkLabel(
+            top_frame, text=current_content()["title"], font=("PLAY", 12, "bold"), text_color=COLOR_TEXT_WHITE
+        )
+        title_label.pack(side="left", padx=15, pady=10)
+
+        textbox = ctk.CTkTextbox(
+            self.body_frame, wrap="word", state="disabled", font=("PLAY", 11), fg_color="#0a0a0f"
+        )
+        textbox.pack(side="top", fill="both", expand=True, padx=10, pady=10)
+
+        def apply_content():
+            c = current_content()
+            title_label.configure(text=c["title"])
+            textbox.configure(state="normal")
+            textbox.delete("1.0", "end")
+            textbox.insert("1.0", c["body"])
+            textbox.configure(state="disabled")
+            btn_accept.configure(text=c["accept"])
+            btn_exit.configure(text=c["decline"])
+            lang_btn.configure(text="RU" if self.config.language == "en" else "EN")
+
+        def toggle_lang():
+            self.config.language = "ru" if self.config.language == "en" else "en"
+            apply_content()
+
+        lang_btn = ctk.CTkButton(
+            top_frame, text="RU" if self.config.language == "en" else "EN",
+            width=50, height=28, fg_color="#3f3f46", command=toggle_lang
+        )
+        lang_btn.pack(side="right", padx=15, pady=8)
+
+        bot_frame = ctk.CTkFrame(self.body_frame, fg_color="transparent")
+        bot_frame.pack(side="bottom", fill="x", padx=1, pady=(0, 10))
+        btn_frame = ctk.CTkFrame(bot_frame, fg_color="transparent")
+        btn_frame.pack(pady=10, padx=15)
+
+        def on_accept():
+            self.config.disclaimer_accepted = True
+            self.config.set_setting("accepted_version", self.config.SOFTWARE_VERSION)
+            self.config.last_accepted_version = self.config.SOFTWARE_VERSION
+            self.config.save_disclaimer_state()
+            self._clear_body()
+            self._draw_main_view()
+
+        def on_exit():
+            self.quit_app()
+
+        btn_accept = ctk.CTkButton(
+            btn_frame, text=current_content()["accept"], fg_color=COLOR_GREEN, hover_color="#16a34a", command=on_accept
+        )
+        btn_accept.pack(side="left", padx=(0, 10))
+        btn_exit = ctk.CTkButton(
+            btn_frame, text=current_content()["decline"], fg_color=COLOR_RED, hover_color="#dc2626", command=on_exit
+        )
+        btn_exit.pack(side="left")
+        apply_content()
+        self.show_window()
+
+    def _draw_update_view(self, update_info):
+        """Draw mandatory update view: CRITICAL UPDATE title, body text, INSTALL button. No skip."""
+        self._current_view = "UPDATE"
+        self._update_info = update_info
+        self._clear_body()
+
+        title = ctk.CTkLabel(
+            self.body_frame,
+            text="CRITICAL UPDATE",
+            font=("PLAY", 14, "bold"),
+            text_color=COLOR_ACCENT,
+        )
+        title.pack(side="top", padx=15, pady=(15, 5))
+
+        textbox = ctk.CTkTextbox(
+            self.body_frame, wrap="word", state="disabled", font=("PLAY", 11), fg_color="#0a0a0f"
+        )
+        textbox.pack(side="top", fill="both", expand=True, padx=10, pady=5)
+        textbox.configure(state="normal")
+        textbox.insert("1.0", update_info.get("body", "") or "")
+        textbox.configure(state="disabled")
+
+        btn_frame = ctk.CTkFrame(self.body_frame, fg_color="transparent")
+        btn_frame.pack(side="bottom", fill="x", pady=15, padx=15)
+        self._update_install_btn = ctk.CTkButton(
+            btn_frame,
+            text=f"INSTALL {update_info.get('version', '')}",
+            font=("PLAY", 12, "bold"),
+            fg_color=COLOR_GREEN,
+            hover_color="#16a34a",
+            height=40,
+            command=self._on_update_click,
+        )
+        self._update_install_btn.pack(pady=5)
+        self.show_window()
 
     # --- Window Moving ---
     def start_move(self, event):
@@ -794,87 +913,13 @@ By using SkyLink, you explicitly consent to the automated transmission of naviga
         "decline": "Отказаться и Выйти",
     }
 
-    def show_disclaimer_modal(self):
-        """Modal: Privacy disclaimer. EN/RU toggle. Accept -> save and continue; Decline -> quit_app()."""
-        modal = ctk.CTkToplevel(self)
-        modal.title("SkyLink Privacy & Data Policy")
-        modal.geometry("560x420")
-        modal.configure(fg_color=COLOR_BORDER)
-        modal.resizable(True, True)
-        modal.transient(self)
-        modal.protocol("WM_DELETE_WINDOW", self.quit_app)
-
-        # Top: title + language switch
-        top_frame = ctk.CTkFrame(modal, fg_color=COLOR_BG, corner_radius=0)
-        top_frame.pack(side="top", fill="x", padx=1, pady=(1, 0))
-        title_label = ctk.CTkLabel(
-            top_frame, text=self._DISCLAIMER_EN["title"], font=("PLAY", 12, "bold"), text_color=COLOR_TEXT_WHITE
-        )
-        title_label.pack(side="left", padx=15, pady=10)
-
-        def current_content():
-            return self._DISCLAIMER_RU if self.config.language == "ru" else self._DISCLAIMER_EN
-
-        def apply_content():
-            c = current_content()
-            title_label.configure(text=c["title"])
-            textbox.configure(state="normal")
-            textbox.delete("1.0", "end")
-            textbox.insert("1.0", c["body"])
-            textbox.configure(state="disabled")
-            btn_accept.configure(text=c["accept"])
-            btn_decline.configure(text=c["decline"])
-            lang_btn.configure(text="RU" if self.config.language == "en" else "EN")
-
-        def toggle_lang():
-            self.config.language = "ru" if self.config.language == "en" else "en"
-            apply_content()
-
-        lang_btn = ctk.CTkButton(
-            top_frame, text="RU", width=50, height=28, fg_color="#3f3f46", command=toggle_lang
-        )
-        lang_btn.pack(side="right", padx=15, pady=8)
-
-        # Middle: scrollable read-only text
-        mid_frame = ctk.CTkFrame(modal, fg_color=COLOR_BG, corner_radius=0)
-        mid_frame.pack(side="top", fill="both", expand=True, padx=1, pady=0)
-        textbox = ctk.CTkTextbox(mid_frame, wrap="word", state="disabled", font=("PLAY", 11), fg_color="#0a0a0f")
-        textbox.pack(fill="both", expand=True, padx=10, pady=10)
-
-        # Bottom: Accept (green) / Decline (red)
-        bot_frame = ctk.CTkFrame(modal, fg_color=COLOR_BG, corner_radius=0)
-        bot_frame.pack(side="bottom", fill="x", padx=1, pady=(0, 1))
-        btn_frame = ctk.CTkFrame(bot_frame, fg_color="transparent")
-        btn_frame.pack(pady=15, padx=15)
-
-        def on_accept():
-            self.config.disclaimer_accepted = True
-            self.config.save_disclaimer_state()
-            modal.destroy()
-
-        def on_decline():
-            modal.destroy()
-            self.quit_app()
-
-        btn_accept = ctk.CTkButton(
-            btn_frame, text=self._DISCLAIMER_EN["accept"], fg_color=COLOR_GREEN, hover_color="#16a34a", command=on_accept
-        )
-        btn_accept.pack(side="left", padx=(0, 10))
-        btn_decline = ctk.CTkButton(
-            btn_frame, text=self._DISCLAIMER_EN["decline"], fg_color=COLOR_RED, hover_color="#dc2626", command=on_decline
-        )
-        btn_decline.pack(side="left")
-
-        apply_content()
-
-        modal.update()
-        modal.grab_set()
-        self.wait_window(modal)
-
     # --- Animation & Loop ---
     def update_ui_loop(self):
         # Если флаг выключения поднят или окна уже нет — выходим сразу
         if not self.running or not self.winfo_exists():
+            return
+        if self._current_view != "MAIN":
+            self.after(50, self.update_ui_loop)
             return
 
         try:
@@ -989,11 +1034,6 @@ if __name__ == "__main__":
 
     # 2. Если мы одни — начинаем работу
     config = Config()
-
-    # Передаем наш config внутрь функции start_background_service
-    bg_thread = threading.Thread(target=start_background_service, args=(config,), daemon=True)
-    bg_thread.start()
-
     app = SkyLinkGUI(config)
     app.protocol("WM_DELETE_WINDOW", app.minimize_to_tray)
     try:

@@ -102,6 +102,7 @@ class Config:
 
         self.disclaimer_accepted = False
         self.language = "en"
+        self.last_accepted_version = ""
 
         self.event_rules = {}
         self.field_rules = {}
@@ -141,6 +142,7 @@ class Config:
                 data = json.loads(content)
             self.disclaimer_accepted = data.get("disclaimer_accepted", False)
             self.language = data.get("language", "en")
+            self.last_accepted_version = data.get("accepted_version", "")
         except (IOError, json.JSONDecodeError) as e:
             logging.warning("Could not load settings: %s", e)
 

@@ -23,7 +23,7 @@ class UpdateManager:
     def check_for_updates(self) -> Optional[dict[str, Any]]:
         """
         GET GitHub releases/latest. Compare tag with config.SOFTWARE_VERSION.
-        Return {'version': str, 'assets': list} if remote > local, else None.
+        Return {'version': str, 'body': str, 'assets': list} if remote > local, else None.
         On request failure or non-200 response, return None.
         """
         url = GITHUB_API_LATEST.format(repo=self.config.GITHUB_REPO)
@@ -50,7 +50,8 @@ class UpdateManager:
             return None
         if remote_ver <= local_ver:
             return None
-        return {"version": tag_stripped, "assets": data.get("assets") or []}
+        body = data.get("body") or ""
+        return {"version": tag_stripped, "body": body, "assets": data.get("assets") or []}
 
     def find_installer_url(self, assets: list) -> Optional[str]:
         """
