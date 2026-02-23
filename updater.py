@@ -75,7 +75,7 @@ class UpdateManager:
         """
         path = os.path.join(tempfile.gettempdir(), UPDATE_FILENAME)
         headers = {"User-Agent": self.config.USER_AGENT}
-        with httpx.Client(timeout=60.0) as client:
+        with httpx.Client(timeout=60.0, follow_redirects=True) as client:
             with client.stream("GET", url, headers=headers) as response:
                 response.raise_for_status()
                 total = int(response.headers.get("content-length") or 0)
