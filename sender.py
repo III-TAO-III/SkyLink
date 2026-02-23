@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -264,11 +265,12 @@ class Sender(threading.Thread):
             logging.error("API URL is not configured. Cannot send event.")
             return (False, False)
 
+        x_commander_value = base64.b64encode(cmdr_name.encode("utf-8")).decode("ascii")
         headers = {
             "Content-Type": "application/json",
             "User-Agent": self.config.USER_AGENT,
             "x-api-key": api_key,
-            "x-commander": cmdr_name,
+            "x-commander": x_commander_value,
         }
 
         try:

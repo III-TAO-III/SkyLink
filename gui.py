@@ -929,8 +929,12 @@ By using SkyLink, you explicitly consent to the automated transmission of naviga
 
             # 1. Получаем текущее состояние
             status_text = UI_STATE.get("status", "Idle")
-            st_lower = status_text.lower()
             current_cmdr = CURRENT_SESSION.get("commander")
+            api_key = CURRENT_SESSION.get("api_key")
+            # Когда командир определён по логу, но ключа нет — показываем явное требование ключа
+            if current_cmdr and not api_key:
+                status_text = "API KEY is required!!!"
+            st_lower = status_text.lower()
 
             # 2. Обновляем блок активного пилота: полный статус в окне (бегущая строка, если не помещается)
             if status_text != self._marquee_full_text:
@@ -955,7 +959,9 @@ By using SkyLink, you explicitly consent to the automated transmission of naviga
 
             # 3. Краткий статус внизу (в футере)
             if current_cmdr:
-                if "waiting" in st_lower or "standby" in st_lower or "closed" in st_lower:
+                if current_cmdr and not api_key:
+                    self.lbl_footer_status.configure(text="NO KEY ●", text_color=COLOR_RED)
+                elif "waiting" in st_lower or "standby" in st_lower or "closed" in st_lower:
                     self.lbl_footer_status.configure(text="STANDBY ●", text_color="#FFC107")
                 elif (
                     "error" in st_lower
@@ -977,7 +983,9 @@ By using SkyLink, you explicitly consent to the automated transmission of naviga
 
             # 5. Логика цвета Трея
             target_color = "gray"
-            if "waiting" in st_lower or "standby" in st_lower or "closed" in st_lower:
+            if current_cmdr and not api_key:
+                target_color = "red"
+            elif "waiting" in st_lower or "standby" in st_lower or "closed" in st_lower:
                 target_color = "yellow"
             elif "running" in st_lower or "sent" in st_lower or "monitoring" in st_lower:
                 target_color = "green"

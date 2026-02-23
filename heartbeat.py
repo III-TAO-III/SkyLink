@@ -3,6 +3,7 @@ HeartbeatService: periodic "skylinkbeat" signals for all configured accounts.
 Runs in a dedicated daemon thread; does not block main UI or other services.
 """
 
+import base64
 import logging
 import threading
 
@@ -40,9 +41,10 @@ class HeartbeatService(threading.Thread):
                     break
                 prev = self._account_state.get(cmdr_name)
                 try:
+                    x_commander_value = base64.b64encode(cmdr_name.encode("utf-8")).decode("ascii")
                     headers = {
                         "x-api-key": api_key,
-                        "x-commander": cmdr_name,
+                        "x-commander": x_commander_value,
                         "User-Agent": self.config.USER_AGENT,
                     }
                     response = httpx.post(
